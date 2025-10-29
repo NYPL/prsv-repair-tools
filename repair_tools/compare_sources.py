@@ -42,9 +42,9 @@ def setup_logging(log_file: Path):
 
 ################# Variables
 
-CACHE_PATH = Path("/Users/emileebuytkins/Documents/Buytkins_Programming/compare_volumes_logs_index/target_index.json")
-SOURCE_CACHE_PATH = Path("/Users/emileebuytkins/Documents/Buytkins_Programming/index_files/source_index_reingest.json")
-DELETION_LIST_PATH = Path("/Users/emileebuytkins/Documents/Buytkins_Programming/complete_reingest.txt")
+CACHE_PATH = Path()
+SOURCE_CACHE_PATH = Path()
+DELETION_LIST_PATH = Path()
 
 NUM_THREADS = (os.cpu_count() - 2) if (os.cpu_count() - 2) > 0 else 1
 
@@ -108,14 +108,20 @@ def parse_args():
     parser.add_argument(
         "--srcindex",
         '-si',
-        action="store_true",
-        help="Flag to use cached source index",
+        type=Path,
+        help="Path cached source index",
+        )
+    parser.add_argument(
+        "--target-index",
+        '-ti',
+        type=Path,
+        help="Path cached target index",
         )
     parser.add_argument(
         "--checklist",
         "-cl",
-        action="store_true",
-        help="Flag to check packages against deletion checklist only",
+        type=Path,
+        help="Path to reingest_list to check packages against list only",
         )
     parser.add_argument(
         "--rsync",
