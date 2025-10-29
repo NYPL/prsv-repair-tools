@@ -373,7 +373,7 @@ def main():
     args = parse_args()
     SLEEP_DURATION = 2
 
-    log_path = Path("/Users/emileebuytkins/Documents/Buytkins_Programming/compare_volumes_logs_index")
+    log_path = args.logpath if args.logpath else Path.cwd() / "compare_sources_logs_index"
     log_path.mkdir(parents=True, exist_ok=True)
     
     logger, list_logger = setup_logging(log_file=Path(log_path / f"compare_mounted_volumes_{datetime.datetime.now().strftime('%Y%m%d')}.log"))
