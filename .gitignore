@@ -1,6 +1,12 @@
 # config files
 *.ini
+!compare_sources_template.ini
 *.token.file
+
+#hidden files
+.*
+!.gitignore
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

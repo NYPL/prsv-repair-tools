@@ -22,10 +22,13 @@ setuptools = "^80.1.0"
 delete_hidden_files = 'repair_tools.delete_hidden_files:main'
 correct_double_bag = 'repair_tools.correct_double_bag:main'
 compare_sources = 'repair_tools.compare_sources:main'
-create_symlink = 'repair_tools.create_symlink:main'
 prsv_move = 'repair_tools.prsv_move:main'
 move_reingest = 'repair_tools.move_reingest:main'
 download_sc = 'repair_tools.download_sc:main'
+
+create_symlink = 'repair_tools.path_tools.create_symlink:main'
+directory_indexer = 'repair_tools.path_tools.directory_indexer:main'
+search_index = 'repair_tools.path_tools.search_index:main'
 
 [build-system]
 requires = ["poetry-core"]

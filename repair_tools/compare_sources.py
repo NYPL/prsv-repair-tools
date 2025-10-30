@@ -9,6 +9,7 @@ import datetime
 import requests
 import re
 import shutil
+import configparser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import repair_tools.prsv_api as prsvapi
 
@@ -42,9 +43,28 @@ def setup_logging(log_file: Path):
 
 ################# Variables
 
-CACHE_PATH = Path()
-SOURCE_CACHE_PATH = Path()
-DELETION_LIST_PATH = Path()
+config = configparser.ConfigParser()
+SCRIPT_DIR = Path(__file__).parent
+INI_PATH = SCRIPT_DIR / 'compare_sources.ini'
+
+# fallback defaults
+CACHE_PATH = Path.cwd() / "compare_sources_indexes" / "target_index.json"
+SOURCE_CACHE_PATH = Path.cwd() / "compare_sources_indexes" / "source_index_reingest.json"
+DELETION_LIST_PATH = Path.cwd() / "complete_reingest.txt"
+LOG_PATH_DEFAULT = Path.cwd() / "compare_sources_logs_index"
+
+if INI_PATH.exists():
+    config.read(INI_PATH)
+    if 'Paths' in config:
+        paths = config['Paths']
+        CACHE_PATH = Path(paths.get('CACHE_PATH', CACHE_PATH))
+        SOURCE_CACHE_PATH = Path(paths.get('SOURCE_CACHE_PATH', SOURCE_CACHE_PATH))
+        DELETION_LIST_PATH = Path(paths.get('DELETION_LIST_PATH', DELETION_LIST_PATH))
+        LOG_PATH_DEFAULT = Path(paths.get('LOG_PATH', LOG_PATH_DEFAULT))
+    else:
+        logging.warning(f"INI file found at {INI_PATH}, but [Paths] section is missing. Using defaults.")
+else:
+    logging.warning(f"INI file not found at {INI_PATH}. Using defaults.")
 
 NUM_THREADS = (os.cpu_count() - 2) if (os.cpu_count() - 2) > 0 else 1
 
@@ -129,13 +149,13 @@ def parse_args():
         action="store_true",
         help="Flag to run rsync copy/move commands instead of shutil",
         )
-    # parser.add_argument(
-    #     "--logpath",
-    #     "-lp",
-    #     type=extant_dir,
-    #     required=True,
-    #     help="""base path to directory where log file and target directory index will be created.""",
-    #     )
+    parser.add_argument(
+        "--logpath",
+        "-lp",
+        type=extant_dir,
+        required=True,
+        help="""base path to directory where log file and target directory index will be created.""",
+        )
     return parser.parse_args()
 #################
 
@@ -250,7 +270,7 @@ def get_amipackages_uuids(
 ) -> requests.Response:
     """get AMI uuids based on first 3 digits of AMI ID"""
     query_params = {
-        "q": "%",
+        "q": "",
         "fields": [
             {"name": "xip.title", "values": [f"{pkg_id}"]},
             {"name": "xip.identifier", "values": ["DigitizedAMIContainer"]}
@@ -372,8 +392,12 @@ def get_source_index(single_dir: Path):
 def main():
     args = parse_args()
     SLEEP_DURATION = 2
+    
+    target_cache_path = args.target_index if args.target_index else CACHE_PATH 
+    source_cache_path = args.srcindex if args.srcindex else SOURCE_CACHE_PATH
+    deletion_list_path = args.checklist if args.checklist else DELETION_LIST_PATH
 
-    log_path = Path("/Users/emileebuytkins/Documents/Buytkins_Programming/compare_volumes_logs_index")
+    log_path = args.logpath if args.logpath else LOG_PATH_DEFAULT
     log_path.mkdir(parents=True, exist_ok=True)
     
     logger, list_logger = setup_logging(log_file=Path(log_path / f"compare_mounted_volumes_{datetime.datetime.now().strftime('%Y%m%d')}.log"))
@@ -382,17 +406,17 @@ def main():
     source_index = {}
 
     if args.checklist:
-        logger.info(f"Reading package names from file: {DELETION_LIST_PATH}")
-        if not DELETION_LIST_PATH.exists():
-            logger.error(f"Deletion list file not found at: {DELETION_LIST_PATH}")
+        logger.info(f"Reading package names from file: {deletion_list_path}")
+        if not deletion_list_path.exists():
+            logger.error(f"Deletion list file not found at: {deletion_list_path}")
             raise SystemExit("Exiting: File not found.")
-        source_dirs = [line.strip() for line in DELETION_LIST_PATH.read_text().splitlines() if line.strip()]
+        source_dirs = [line.strip() for line in deletion_list_path.read_text().splitlines() if line.strip()]
         logger.info(f"Found {len(source_dirs)} package names to check from the list.")
     elif args.source:
         logger.info(f"Scanning source directory: {args.source}")
         source_dir = Path(args.source)
         if args.srcindex:
-            source_index = find_source_index(source_dir, logger)
+            source_index = find_source_index(source_dir, logger, cache_path=source_cache_path)
         else:
             logger.info("Creating temp source index...")
             source_index = {dir.name: dir for dir in source_dir.rglob("*") if dir.is_dir() and len(dir.name) == 6 and dir.name.isdigit()}
@@ -400,13 +424,13 @@ def main():
         source_dirs = list(source_index.keys())
     else:
         logger.error("You must provide a --source directory or use the --check-list flag.")
-        raise SystemExit("Exiting: No source specified.")
+        raise SystemExit("No source specified.")
     
     target_index = {}
     if not args.prsvcheck:
         if args.target:
             target_dir = Path(args.target)
-            target_index = find_index(target_dir, logger)
+            target_index = find_index(target_dir, logger, cache_path=target_cache_path)
         else:
             logger.error("When not using --prsvcheck you must provide --target argument")
             raise SystemExit("Missing --target")
@@ -458,15 +482,15 @@ def main():
     print(" --- COMPARE SUMMARY --- ")
     logger.info(f"\nTotal packages checked: {len(source_dirs)}\nFound in Preservica: {len(prsv_uuids)}\nFound in target: {len(index_uuids)}\nMissing: {len(missing_dirs)}\n")
 
-    current_deletion_list = [line for line in DELETION_LIST_PATH.read_text().splitlines() if line.strip()]
+    current_deletion_list = [line for line in deletion_list_path.read_text().splitlines() if line.strip()]
     updated_list = [pkg for pkg in current_deletion_list if pkg not in prsv_uuids]
     final_list = sorted(list(set(updated_list + missing_dirs)))
     
-    logger.info(f"Updating {DELETION_LIST_PATH.name}...")
+    logger.info(f"Updating {deletion_list_path.name}...")
     logger.info(f"Removed {len(current_deletion_list) - len(updated_list)} already ingested packages from the list.")
     logger.info(f"Adding {len(final_list) - len(updated_list)} new missing packages to the list.")
 
-    with open(DELETION_LIST_PATH, "w") as f:
+    with open(deletion_list_path, "w") as f:
         for pkg in final_list:
             f.write(f"{pkg}\n")
             
