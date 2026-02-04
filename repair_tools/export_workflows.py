@@ -32,7 +32,6 @@ def parse_args():
         "--credentials",
         type=str,
         required=True,
-        choices=["test-ingest", "prod-ingest", "test-manage"],
         help="which set of credentials to use",
         )
     parser.add_argument(
