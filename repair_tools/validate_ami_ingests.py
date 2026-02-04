@@ -49,7 +49,6 @@ def parse_args():
     parser.add_argument(
         "--credentials", "-c",
         required=True,
-        default="prod-ingest",
         help="Credentials set name to use (default: prod-ingest)."
     )
     parser.add_argument(
