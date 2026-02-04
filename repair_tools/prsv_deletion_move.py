@@ -23,13 +23,6 @@ def parse_args():
         help="One or more titles of packages to find and move, separated by a space."
     )
     parser.add_argument(
-        "--directory",
-        "-d",
-        type=Path,
-        help="(Optional) Path to a directory containing multiple packages to move. Usually on _reingest folder after ingest validation"
-    )
-
-    parser.add_argument(
         "--new-parent-ref",
         "-npf",
         required=True,
@@ -116,14 +109,7 @@ def main():
     log_file = log_path / f"prsv_move_{datetime.datetime.now().strftime('%Y%m%d')}.log"
     logger, _ = setup_logging(log_file)
 
-    if args.directory:
-        if not args.directory.is_dir():
-            logger.error(f"Directory not found: {args.directory}")
-            return
-        logger.info(f"Getting package names from directory: {args.directory}")
-        pkg_list = [item.name for item in args.directory.iterdir() if item.is_dir()]
-    else:
-        pkg_list = args.pkgtitle
+    pkg_list = args.pkgtitle
 
     process_move_list(
         credentials=args.credentials,
