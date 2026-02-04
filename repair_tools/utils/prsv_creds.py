@@ -1,7 +1,7 @@
 import configparser
 from pathlib import Path
 
-CREDS_INI = Path(__file__).parent / "credentials.ini"
+CREDS_INI = Path(__file__).parent.parent / "credentials.ini"
 
 
 class PrsvCredentialException(Exception):

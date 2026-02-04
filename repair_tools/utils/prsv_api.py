@@ -5,7 +5,7 @@ from pathlib import Path
 
 import requests
 
-import repair_tools.prsv_creds as prsvcreds
+import repair_tools.utils.prsv_creds as prsvcreds
 
 TOKEN_BASE_URL = "https://nypl.preservica.com/api/accesstoken/login"
 

@@ -12,6 +12,8 @@ pymediainfo = "^7.0.1"
 msgpack = "^1.1.1"
 tqdm = "^4.67.1"
 boto3 = "^1.40.42"
+pandas = "^2.3.3"
+colorama = "^0.4.6"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
@@ -24,11 +26,23 @@ correct_double_bag = 'repair_tools.correct_double_bag:main'
 compare_sources = 'repair_tools.compare_sources:main'
 prsv_move = 'repair_tools.prsv_move:main'
 move_reingest = 'repair_tools.move_reingest:main'
-download_sc = 'repair_tools.download_sc:main'
+download_sc_mp4 = 'repair_tools.download_sc_mp4:main'
+
+create_manifest = 'repair_tools.create_manifest:main'
+create_bag_structure = 'repair_tools.create_bag_structure:main'
 
 create_symlink = 'repair_tools.path_tools.create_symlink:main'
+
 directory_indexer = 'repair_tools.path_tools.directory_indexer:main'
 search_index = 'repair_tools.path_tools.search_index:main'
+
+export_workflows = 'repair_tools.export_workflows:main'
+
+validate_ami_ingests = 'repair_tools.validate_ami_ingests:main'
+
+prsv_deletion_move = 'repair_tools.prsv_deletion_move:main'
+
+mix_streams = 'repair_tools.mix_streams:main'
 
 [build-system]
 requires = ["poetry-core"]

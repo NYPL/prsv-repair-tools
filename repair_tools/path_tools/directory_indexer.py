@@ -21,7 +21,7 @@ def create_directory_index_json(root_dir: Path):
         current_node = path_to_node_map.get(current_dir_path)
 
         if current_node is None:
-            print(f"Warning: Could not find node for path {current_dir_path}. Skipping.")
+            print(f"WARNING: Could not find node for path {current_dir_path}. Skipping.")
             continue
 
         local_dirnames = []
@@ -39,10 +39,10 @@ def create_directory_index_json(root_dir: Path):
                         local_filenames.append(p.name)
 
         except PermissionError:
-            print(f"Warning: Permission denied for directory {current_dir_path}. Skipping.")
+            print(f"WARNING: Permission denied for directory {current_dir_path}. Skipping.")
             continue
         except FileNotFoundError:
-            print(f"Warning: Directory {current_dir_path} not found. Skipping.")
+            print(f"WARNING: Directory {current_dir_path} not found. Skipping.")
             continue
             
         local_dirnames.sort()
@@ -65,11 +65,9 @@ def create_directory_index_json(root_dir: Path):
             json.dump(dir_tree, f, indent=2, ensure_ascii=False)
         print(f"Successfully created JSON index at: {output_filepath}")
     except IOError as e:
-        print(f"Error: Could not write file to {output_filepath}")
-        print(f"Details: {e}")
+        print(f"ERROR: Could not write file to {output_filepath}: {e}")
     except TypeError as e:
-        print(f"Error: Could not serialize data to JSON.")
-        print(f"Details: {e}")
+        print(f"ERROR: Could not serialize data to JSON: {e}")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
@@ -90,7 +88,7 @@ def main():
     target_dir = args.path
     
     if not target_dir.is_dir():
-        print(f"Error: Path '{target_dir}' is not a valid directory.")
+        print(f"ERROR: Path '{target_dir}' is not a valid directory.")
         sys.exit(1)
         
     abs_target_dir = target_dir.resolve()

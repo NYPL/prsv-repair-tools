@@ -56,25 +56,26 @@ def main():
     search_term = args.searchterm
 
     # interchangeable use of args and index_file parent (depending on where the index is located)
-    base_dir = Path(args.basepath)
+    if args.basepath:
+        base_dir = Path(args.basepath)
 
     # try:
     #     base_dir = Path(index_file).resolve().parent
     # except Exception as e:
-    #     print(f"Warning: Could not resolve full path. Using relative parent. Error: {e}")
+    #     print(f"WARNING: Could not resolve full path. Using relative parent. Error: {e}")
     #     base_dir = Path(index_file).parent
     
     try:
         with open(index_file, 'r', encoding='utf-8') as f:
             index_data = json.load(f)
     except FileNotFoundError:
-        print(f"Error: Index file not found at '{index_file}'")
+        print(f"ERROR: Index file not found at '{index_file}'")
         return
     except json.JSONDecodeError:
-        print(f"Error: Could not decode JSON from '{index_file}'")
+        print(f"ERROR: Could not decode JSON from '{index_file}'")
         return
     except Exception as e:
-        print(f"Error occurred while reading the file: {e}")
+        print(f"ERROR occurred while reading the file: {e}")
         return
 
     results = search_tree_for_key(index_data, search_term)
