@@ -7,7 +7,7 @@ import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import repair_tools.prsv_deletion_move as prsv_deletion_move
+import repair_tools.prsv_move as prsv_move
 import repair_tools.utils.file_utils as file_utils
 from repair_tools.utils.preservica_search_parse import PreservicaAPI
 from repair_tools.utils.logger_setup import setup_logging
@@ -205,7 +205,7 @@ def main():
         if missing_dirs:
             logger.info(f"Starting Preservica deletion workflow for {len(missing_dirs)} missing packages...")
 
-            prsv_deletion_move.process_move_list(
+            prsv_move.process_move_list(
                 credentials=args.credentials,
                 pkg_list=missing_dirs,
                 new_parent_ref=args.deletion_parent_ref,
