@@ -2,7 +2,6 @@
 import argparse
 import os
 import sys
-import requests
 import logging
 import concurrent.futures
 import time

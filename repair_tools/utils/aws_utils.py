@@ -9,7 +9,6 @@ def validate_aws_sso(profile_name):
 
     logging.info(f"Validating AWS SSO session for profile: {profile_name}...")
     try:
-        # Create a temporary session to check identity (lightweight call)
         session = boto3.Session(profile_name=profile_name)
         sts = session.client('sts')
         sts.get_caller_identity()
@@ -20,7 +19,6 @@ def validate_aws_sso(profile_name):
         
         logging.warning("AWS SSO token has expired or is invalid. Attempting auto-login...")
         try:
-            # Run the AWS CLI login command. This will open the browser.
             subprocess.check_call(
                 ["aws", 
                  "sso", 
