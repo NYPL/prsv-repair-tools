@@ -33,10 +33,9 @@ create_symlink = 'repair_tools.path_tools.create_symlink:main'
 directory_indexer = 'repair_tools.path_tools.directory_indexer:main'
 search_index = 'repair_tools.path_tools.search_index:main'
 export_workflows = 'repair_tools.export_workflows:main'
-validate_ami_ingests = 'repair_tools.validate_ami_ingests:main'
-prsv_deletion_move = 'repair_tools.prsv_deletion_move:main'
 mix_streams = 'repair_tools.mix_streams:main'
 check_size = 'repair_tools.check_size:main'
+clear_transient_folders = 'repair_tools.clear_transient_folders:main'
 
 [build-system]
 requires = ["poetry-core"]
