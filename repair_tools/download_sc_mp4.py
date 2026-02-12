@@ -256,7 +256,7 @@ def download_file_worker(task):
     bucket, key, dest, pkg_path, pm_filename, test_mode = task
     
     if dest.exists():
-        return pkg_path, pm_filename, f"Skipped (Exists): {dest.name}", True
+        return pkg_path, pm_filename, f"Skipped (SC Exists): {dest.name}", True
 
     if test_mode:
         return pkg_path, pm_filename, f"[TEST] Would download {key} to {dest}", True
@@ -464,6 +464,7 @@ def main():
                     logging.error(f"Transcode errors for {pkg.name}: {errors}")
 
     fixed_dir = pkg_paths[0].parent.parent / '_sc_fixed'
+    iso_false_dir = pkg_paths[0].parent.parent / '_iso'
     successful_pkgs_to_move = []
 
     for pkg, data in package_status.items():
@@ -506,6 +507,17 @@ def main():
                     logging.info("Empty source directory removed.")
                 except Exception as e:
                     logging.error(f"Failed to remove empty source directory: {e}")
+        else:
+            if ENABLE_ISO_TRANSCODE == False:
+                iso_false_dir.mkdir(parents=True, exist_ok=True)
+                if any(pkg for pkg, data in package_status.items() if len(data['expected_pms']) != len(data['secured_pms'])) and any(pkg for pkg in source_dir.iterdir() if pkg.suffix.lower == ".iso"):
+                    try:
+                        shutil.move(str(source_dir), str(iso_false_dir))
+                        logging.info(f"Directory containing .iso packages moved to {iso_false_dir}")
+                    except Exception as e: 
+                        logging.error(f"Failed to move .iso packages to {iso_false_dir}: {e}")
+                    
+                
 
 
 if __name__ == "__main__":

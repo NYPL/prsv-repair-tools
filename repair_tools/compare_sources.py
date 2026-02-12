@@ -280,7 +280,7 @@ def main():
                         logger.warning(f"Cannot move {dir_name}, not in source index. Skipping.")
                         continue
                     source_path = source_index[dir_name]
-                    dest_path = file_utils.build_destination_path(dir_name, source_path, args.movedir)
+                    dest_path = file_utils.build_destination_path(dir_name, source_path, Path(args.movedir/source_path.parent.name))
                     futures[executor.submit(file_utils.move_package, source_path, dest_path, args.rsync)] = dir_name
 
                 for future in as_completed(futures):

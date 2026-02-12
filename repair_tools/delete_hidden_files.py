@@ -1,7 +1,6 @@
 import argparse
 import logging
 from pathlib import Path
-import repair_tools.cli as cli
 
 logging.basicConfig(level=logging.INFO)
 
@@ -17,15 +16,16 @@ class ExtendUnique(argparse.Action):
         setattr(namespace, self.dest, items)
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser
+    parser = argparse.ArgumentParser()
 
     parser.add_argument(
             "--directory",
             type=list_of_paths,
-            dest="packages",
+            dest="directory",
             action=ExtendUnique,
             help="path to a directory of packages",
         )
+    return parser.parse_args()
     
 def list_of_paths(p: str) -> list[Path]:
     path = extant_dir(p)
@@ -48,21 +48,31 @@ def extant_dir(p: str) -> Path:
 
 
 def get_hidden_files(directory: Path):
-    for dir in directory.rglob('.*'):
-        if dir.is_dir():
-            dir.rmdir()
-            logging.info(f"Removing: {str(dir)}")
+    for hidden_f in directory.rglob('.*'):
+        # if hidden_f.name == ".DS_Store":
+        if hidden_f.is_dir():
+            hidden_f.rmdir()
+            logging.info(f"Removing: {str(hidden_f.name)}")
         else:
-            dir.unlink()
-            logging.info(f"Removing: {str(dir.name)}")
+            hidden_f.unlink()
+            logging.info(f"Removing: {str(hidden_f.name)}")
+        # else:
+            # logging.info(f"Hidden file found: {str(hidden_f)}")
+            # confirm = input("Remove hidden file? (y/n): ").strip().lower()
+            # if confirm == 'y':
+            #     if hidden_f.is_dir():
+            #         hidden_f.rmdir()
+            #     else:
+            #         hidden_f.unlink()
+            #     logging.info(f"Removed: {str(hidden_f.name)}")
 
 
 def main():
     args = parse_args()
-    # directory = Path("/Volumes/lpasync/prsv_prod_ingest/has_hidden_files")
-    directory = Path(args.directory)
+    
+    for package_path in args.directory:
+        get_hidden_files(package_path)
 
-    get_hidden_files(directory)
 
 
 if __name__ == "__main__":

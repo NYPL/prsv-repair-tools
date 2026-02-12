@@ -36,6 +36,8 @@ export_workflows = 'repair_tools.export_workflows:main'
 mix_streams = 'repair_tools.mix_streams:main'
 check_size = 'repair_tools.check_size:main'
 clear_transient_folders = 'repair_tools.clear_transient_folders:main'
+find_duplicates = 'repair_tools.find_duplicates:main'
+delete_0byte = 'repair_tools.delete_0byte:main'
 
 [build-system]
 requires = ["poetry-core"]
