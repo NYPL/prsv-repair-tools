@@ -145,7 +145,11 @@ def create_sc_worker(task):
     
     try:
         sc_dir = pkg_path / 'data' / 'ServiceCopies'
-        sc_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            sc_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logging.warning(f"Failed to create SC directory {sc_dir}: {e}")
+            pass
 
         if not files_to_process:
              return pkg_path, [], ["No PM files found to transcode worker"]
@@ -262,7 +266,16 @@ def download_file_worker(task):
         return pkg_path, pm_filename, f"[TEST] Would download {key} to {dest}", True
 
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logging.warning(f"Failed to create SC directory {dest.parent}: {e}")
+            return pkg_path, pm_filename, f"Failed to create directory for {dest.parent}: {e}", False
+        try:
+            dest.parent.chmod(0o777)
+        except Exception as e:
+            logging.warning(f"Failed to set permissions for {dest.parent}: {e}")
+            pass
         s3 = boto3.client('s3')
         s3.download_file(bucket, key, str(dest))
         return pkg_path, pm_filename, f"{key} found in bucket and downloaded to: {dest.name}", True

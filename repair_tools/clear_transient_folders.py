@@ -222,7 +222,7 @@ def main():
         logger.info(f"Found {len(transient_folders)} transient folders.")
 
         for t_uuid, t_title in transient_folders.items():
-            logger.info(f"Checking {t_title}...")
+            logger.info(f"Checking {t_title}")
             t_children = get_children_with_titles(api, t_uuid)
             
             count_in_folder = 0
@@ -255,7 +255,7 @@ def main():
             logger.info(f"[DEBUG] Would move '{p_title}' ({p_uuid}) to deletion folder: {args.deletion_ref}")
             success_count += 1
         else:
-            logger.info(f"Moving '{p_title}'...")
+            logger.info(f"Moving '{p_title}'")
             if api.move_entity(p_uuid, args.deletion_ref):
                 # logger.info(f"SUCCESS: Moved '{p_title}'")
                 success_count += 1

@@ -61,6 +61,10 @@ def process_move_list(credentials: str, pkg_list: list, new_parent_ref: str, lim
     successful_moves = set()
     deletion_exists = set()
 
+    if not pkg_list:
+        logger.warning("No package titles provided. Nothing to do.")
+        return True
+
     logger.info(f"Starting move workflow for {len(pkg_list)} packages.")
 
     for pkg_title in pkg_list:
@@ -101,6 +105,8 @@ def process_move_list(credentials: str, pkg_list: list, new_parent_ref: str, lim
     if failed_moves:
         for pkg in sorted(list(failed_moves)):
             logger.info(f"- {pkg}")
+            
+    return len(failed_moves) == 0
 
 def main():
     args = parse_args()
@@ -111,13 +117,17 @@ def main():
 
     pkg_list = args.pkgtitle
 
-    process_move_list(
+    success = process_move_list(
         credentials=args.credentials,
         pkg_list=pkg_list,
         new_parent_ref=args.new_parent_ref,
         limit_parent=args.parent,
         existing_logger=logger
     )
+
+    if success:
+        logging.shutdown()
+        log_file.unlink(missing_ok=True)
 
 if __name__ == "__main__":
     main()

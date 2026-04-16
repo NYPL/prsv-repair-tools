@@ -183,22 +183,47 @@ def main():
     # 4. search preservica
     api = PreservicaAPI(args.credentials)
     
-    logger.info(f"Checking {len(source_dirs)} packages against Preservica...")
+    logger.info(f"Checking {len(source_dirs)} packages against Preservica.")
     missing_dirs = []
     index_uuids = []
     prsv_uuids = []
+    failed_checks = []
 
-    for dir_name in sorted(source_dirs):
-        if api.check_package_exists(dir_name):
-            logger.info(f"{dir_name} found in Preservica.\n")
-            prsv_uuids.append(dir_name)
-        else:
-            if dir_name not in target_index:
-                missing_dirs.append(dir_name)
-                logger.info(f"{dir_name} not found in Preservica or target directory.\n")
-            else:
-                logger.info(f"{dir_name} not found in Preservica, found in target directory.\n")
-                index_uuids.append(dir_name)
+    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        future_to_dir = {
+            executor.submit(api.check_package_exists, dir_name): dir_name for dir_name in source_dirs
+        }
+        for future in as_completed(future_to_dir):
+            dir_name = future_to_dir[future]
+            try:
+                exists_in_prsv = future.result()
+                if exists_in_prsv:
+                    logger.info(f"{dir_name} found in Preservica.")
+                    prsv_uuids.append(dir_name)
+                elif not args.target:
+                    logger.info(f"{dir_name} not found in Preservica.")
+                    missing_dirs.append(dir_name)
+                else:
+                    if dir_name not in target_index:
+                        missing_dirs.append(dir_name)
+                        logger.info(f"{dir_name} not found in Preservica or target directory.")
+                    else:
+                        logger.info(f"{dir_name} found in target directory, not found in Preservica.")
+                        index_uuids.append(dir_name)
+            except Exception as e:
+                logger.error(f"Error checking for {dir_name} in sources: {e}")
+                failed_checks.append(dir_name)
+    # for dir_name in sorted(source_dirs):
+        # if api.check_package_exists(dir_name):
+            # logger.info(f"{dir_name} found in Preservica.\n")
+            # prsv_uuids.append(dir_name)
+        # else:
+            # if dir_name not in target_index:
+                # missing_dirs.append(dir_name)
+                # logger.info(f"{dir_name} not found in Preservica or target directory.\n")
+            # else:
+                # logger.info(f"{dir_name} not found in Preservica, found in target directory.\n")
+                # index_uuids.append(dir_name)
 
     # 4.5. run prsv_deletion_move (optional)
     if args.deletion_parent_ref:
@@ -314,6 +339,8 @@ def main():
     logger.info(f"Found in Preservica: {len(prsv_uuids)}")
     logger.info(f"Found in target only: {len(index_uuids)}")
     logger.info(f"Missing from all: {len(missing_dirs)}\n")
+  
+    logger.info(f"Failed checks ({len(failed_checks)}): {failed_checks}")
 
     if args.copydir or args.movedir:
         print("\n --- OPERATION SUMMARY --- ")
