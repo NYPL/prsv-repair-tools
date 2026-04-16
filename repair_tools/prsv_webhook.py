@@ -35,7 +35,7 @@ def get_webhook_secret():
     return "1776187381.344287"
 
 WEBHOOK_SECRET = get_webhook_secret()
-DB_FILE = "/Users/emileebuytkins/Documents/Buytkins_Programming/repair-tools/databases/webhook_events.db"
+DB_FILE = Path.cwd() / "databases/webhook_events.db"
 
 # --- SETUP LOGGER ---
 def setup_logging(log_file: Path):
@@ -594,7 +594,7 @@ def dashboard():
     return render_template_string(DASHBOARD_TEMPLATE, headers=headers, events=processed_events)
 
 def main():
-    log_path = Path("/Users/emileebuytkins/Documents/Buytkins_Programming/webhook_logs/")
+    log_path = Path.cwd() / "webhook_logs"
     log_path.mkdir(parents=True, exist_ok=True)
     setup_logging(log_file=Path(log_path / f"webhook_prsv_{datetime.now().strftime('%Y%m%d')}_{datetime.now().strftime('%H%M')}.log"))
     
