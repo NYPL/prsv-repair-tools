@@ -240,6 +240,58 @@ def _get_entity_xml(accesstoken: str, url: str) -> Optional[ET.Element]:
         logging.getLogger(__name__).error(f"API request failed for URL {url}: {e}")
         return None
 
+def fetch_latest_event_action(accesstoken, uuid, version):
+    """
+    Calls /event-actions for an SO and returns the most recent relevant event (trigger, date).
+    """
+    logger = logging.getLogger(__name__)
+    url = f"https://nypl.preservica.com/api/entity/structural-objects/{uuid}/event-actions?start=0&max=100"
+    namespaces = {
+        'entity': f'http://preservica.com/EntityAPI/v{version}',
+        'xip': f'http://preservica.com/XIP/v{version}'
+    }
+    
+    root = _get_entity_xml(accesstoken, url)
+    if root is None:
+        return "UNKNOWN", None
+
+    actions = root.findall('.//xip:EventAction', namespaces)
+    if not actions:
+        return "NO_ACTIONS", None
+    
+    # Sort actions by date descending to find the latest
+    # In the XML, <xip:Date> is a child of EventAction or Event
+    # The user example has <xip:Date> directly under EventAction and also inside Event.
+    # We'll look for the latest one.
+    
+    latest_action = None
+    latest_date = None
+    
+    for action in actions:
+        date_elem = action.find('xip:Date', namespaces)
+        if date_elem is not None and date_elem.text:
+            try:
+                dt = datetime.fromisoformat(date_elem.text.replace('Z', '+00:00'))
+                if latest_date is None or dt > latest_date:
+                    latest_date = dt
+                    latest_action = action
+            except:
+                pass
+                
+    if latest_action is not None:
+        cmd_type = latest_action.get('commandType', 'UNKNOWN')
+        # If commandType is 'command_create' or 'AddFragment' and it's an Ingest event, 
+        # we might want to call it INGEST.
+        event_elem = latest_action.find('xip:Event', namespaces)
+        if event_elem is not None:
+            event_type = event_elem.get('type', '')
+            if event_type:
+                return event_type.upper(), latest_date.isoformat()
+        
+        return cmd_type.upper(), latest_date.isoformat()
+        
+    return "UNKNOWN", None
+
 def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
     logger = logging.getLogger(__name__)
     logger.info(f"Starting polling loop. Interval: {interval_mins}m, Initial Lookback: {lookback_hours}h")
@@ -249,8 +301,9 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
             last_polled = get_last_polled_at()
             if not last_polled:
                 # First run: go back by lookback_hours
+                # Note: User example used .000+0100. We'll use UTC with .000+0000
                 since_dt = datetime.now(pytz.utc) - timedelta(hours=lookback_hours)
-                since_ts = since_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+                since_ts = since_dt.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
             else:
                 since_ts = last_polled
 
@@ -258,11 +311,12 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
             accesstoken = prsvapi.get_token(credential_set=credentials)
             version = prsvapi.find_apiversion(credential_set=credentials)
             
-            url = f"https://nypl.preservica.com/api/entity/entities/updated-since?since={since_ts}"
+            # Use the correct endpoint and parameter name 'date'
+            url = f"https://nypl.preservica.com/api/entity/entities/updated-since?date={since_ts}&start=0&max=100"
             namespaces = {'entity': f'http://preservica.com/EntityAPI/v{version}'}
             root = _get_entity_xml(accesstoken, url)
             
-            new_poll_time = datetime.now(pytz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            new_poll_time = datetime.now(pytz.utc).strftime('%Y-%m-%dT%H:%M:%S.000+0000')
 
             if root is not None:
                 entities = root.findall('.//entity:Entity', namespaces)
@@ -271,25 +325,33 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
                 for entity in entities:
                     etype = entity.get('type')
                     eref = entity.get('ref')
+                    title = entity.get('title', '')
                     
-                    # We only care about Information Objects for the dashboard
-                    if etype == 'IO':
+                    # Filtering: Structural Objects (SO) with numeric titles ONLY
+                    if etype == 'SO' and re.match(r'^\d+$', title):
                         uuid = eref
-                        event_key = f"POLL_{uuid}"
                         
-                        # Create a mock event JSON that matches the dashboard expectations
+                        # Call second endpoint to get event details
+                        trigger, event_date = fetch_latest_event_action(accesstoken, uuid, version)
+                        
+                        if not event_date:
+                            event_date = datetime.now(pytz.utc).isoformat()
+                            
+                        event_key = f"POLL_{uuid}_{event_date}"
+                        
+                        # Create event JSON
                         event_data = {
-                            "trigger": "POLL_DISCOVERY",
+                            "trigger": trigger,
                             "subscriptionId": "POLLING_TASK",
-                            "timestamp": datetime.now(pytz.utc).isoformat(),
-                            "events": [{"entityRef": f"https://nypl.preservica.com/api/entity/information-objects/{uuid}"}]
+                            "timestamp": event_date,
+                            "events": [{"entityRef": f"https://nypl.preservica.com/api/entity/structural-objects/{uuid}"}]
                         }
                         
-                        # Insert into DB (Deduplication handled by INSERT OR IGNORE)
-                        inserted = insert_event("POLL_DISCOVERY", json.dumps(event_data), event_key)
+                        # Insert into DB
+                        inserted = insert_event(trigger, json.dumps(event_data), event_key)
                         
                         if inserted:
-                            logger.info(f"New Package Discovered via Poll: {uuid}")
+                            logger.info(f"New Ingest Discovered: {title} (Trigger: {trigger})")
                             # Start metadata fetch
                             meta_thread = threading.Thread(
                                 target=fetch_and_update_metadata,
