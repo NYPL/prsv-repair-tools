@@ -8,12 +8,11 @@ on_http_request:
         config:
           provider: google
 
-  # 2. Deny access if the email domain is NOT @nypl.org
-  # (This only runs if Rule #1 was triggered)
+  # 2. Block access if the email domain is NOT @nypl.org
   - expressions:
       - "req.url.path.startsWith('/dashboard') && !actions.ngrok.oauth.identity.email.endsWith('@nypl.org')"
     actions:
-      - type: deny
+      - type: custom-response
         config:
           status_code: 403
           body: "Access Denied: You must use an @nypl.org account."
