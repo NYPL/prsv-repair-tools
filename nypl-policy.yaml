@@ -1,0 +1,11 @@
+# nypl-policy.yml for webhook/ngrok
+on_http_request:
+  - expressions:
+      - "req.url.path.startsWith('/dashboard')"
+    actions:
+      - type: oauth
+        config:
+          provider: google
+          options:
+            email_domains:
+              - nypl.org
