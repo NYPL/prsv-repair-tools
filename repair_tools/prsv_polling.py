@@ -230,14 +230,15 @@ def get_pkg_title(accesstoken: str, pkg_uuid: str) -> str:
     title = root.find(f".//{{http://preservica.com/XIP/v{version}}}Title")
     return title.text.strip() if title is not None else None
 
-def _get_entity_xml(accesstoken: str, url: str) -> Optional[ET.Element]:
+def _get_entity_xml(accesstoken: str, url: str, params: dict = None) -> Optional[ET.Element]:
     headers = {"Preservica-Access-Token": accesstoken, "accept": "application/xml;charset=UTF-8"}
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
         return ET.fromstring(response.text)
     except Exception as e:
-        logging.getLogger(__name__).error(f"API request failed for URL {url}: {e}")
+        full_url = response.url if 'response' in locals() else url
+        logging.getLogger(__name__).error(f"API request failed for URL {full_url}: {e}")
         return None
 
 def fetch_latest_event_action(accesstoken, uuid, version):
@@ -301,20 +302,28 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
             last_polled = get_last_polled_at()
             if not last_polled:
                 # First run: go back by lookback_hours
-                # Note: User example used .000+0100. We'll use UTC with .000+0000
                 since_dt = datetime.now(pytz.utc) - timedelta(hours=lookback_hours)
                 since_ts = since_dt.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
             else:
                 since_ts = last_polled
+                # Normalize old formats (like Z) to the new required .000+0000 format
+                if 'Z' in since_ts or '.' not in since_ts:
+                    try:
+                        clean_ts = since_ts.replace('Z', '+00:00')
+                        dt = datetime.fromisoformat(clean_ts)
+                        since_ts = dt.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                    except:
+                        pass
 
             logger.info(f"Polling Preservica for updates since {since_ts}...")
             accesstoken = prsvapi.get_token(credential_set=credentials)
             version = prsvapi.find_apiversion(credential_set=credentials)
             
             # Use the correct endpoint and parameter name 'date'
-            url = f"https://nypl.preservica.com/api/entity/entities/updated-since?date={since_ts}&start=0&max=100"
+            url = f"https://nypl.preservica.com/api/entity/entities/updated-since"
+            params = {'date': since_ts, 'start': 0, 'max': 100}
             namespaces = {'entity': f'http://preservica.com/EntityAPI/v{version}'}
-            root = _get_entity_xml(accesstoken, url)
+            root = _get_entity_xml(accesstoken, url, params=params)
             
             new_poll_time = datetime.now(pytz.utc).strftime('%Y-%m-%dT%H:%M:%S.000+0000')
 
