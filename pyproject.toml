@@ -44,6 +44,7 @@ delete_0byte = 'repair_tools.delete_0byte:main'
 wav_to_flac = 'repair_tools.wav_to_flac:main'
 get_md5 = 'repair_tools.get_md5:main'
 prsv_webhook = 'repair_tools.prsv_webhook:main'
+prsv_polling = 'repair_tools.prsv_polling:main'
 
 
 [build-system]
