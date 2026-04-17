@@ -1,11 +1,19 @@
-# nypl-policy.yml for webhook/ngrok
+# nypl-policy.yaml
 on_http_request:
+  # 1. Trigger Google OAuth only for the dashboard
   - expressions:
       - "req.url.path.startsWith('/dashboard')"
     actions:
       - type: oauth
         config:
           provider: google
-          options:
-            email_domains:
-              - nypl.org
+
+  # 2. Deny access if the email domain is NOT @nypl.org
+  # (This only runs if Rule #1 was triggered)
+  - expressions:
+      - "req.url.path.startsWith('/dashboard') && !actions.ngrok.oauth.identity.email.endsWith('@nypl.org')"
+    actions:
+      - type: deny
+        config:
+          status_code: 403
+          body: "Access Denied: You must use an @nypl.org account."
