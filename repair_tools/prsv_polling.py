@@ -353,7 +353,7 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
                             "trigger": trigger,
                             "subscriptionId": "POLLING_TASK",
                             "timestamp": event_date,
-                            "events": [{"entityRef": f"https://nypl.preservica.com/api/entity/structural-objects/{uuid}"}]
+                            "events": [{"entityRef": uuid}]
                         }
                         
                         # Insert into DB
@@ -446,7 +446,10 @@ def dashboard():
         if flat_item['_received_at']:
             try:
                 flat_item['_received_at_sort'] = flat_item['_received_at']
-                utc_dt = datetime.fromisoformat(flat_item['_received_at'].replace('Z', '+00:00'))
+                dt_str = flat_item['_received_at'].replace('Z', '+00:00')
+                utc_dt = datetime.fromisoformat(dt_str)
+                if utc_dt.tzinfo is None:
+                    utc_dt = utc_dt.replace(tzinfo=pytz.utc)
                 est_dt = utc_dt.astimezone(est_zone)
                 flat_item['_received_at'] = est_dt.strftime('%Y-%m-%d %I:%M:%S %p %Z')
             except Exception as e: 
@@ -455,7 +458,8 @@ def dashboard():
         if item.get('events'):
             inner_event = item['events'][0]
             entity_ref = inner_event.get('entityRef')
-            flat_item['entityRef'] = entity_ref
+            if entity_ref:
+                flat_item['entityRef'] = entity_ref.split('/')[-1]
         
         processed_events.append(flat_item)
 
