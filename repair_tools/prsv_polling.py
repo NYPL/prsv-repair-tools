@@ -151,6 +151,14 @@ def insert_event(trigger, event_json, event_key):
     conn.close()
     return was_inserted
 
+def get_pending_events():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT event_key, event_json FROM events WHERE trigger = 'PENDING'")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 def get_events():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -243,7 +251,8 @@ def _get_entity_xml(accesstoken: str, url: str, params: dict = None) -> Optional
 
 def fetch_latest_event_action(accesstoken, uuid, version):
     """
-    Calls /event-actions for an SO and returns the most recent relevant event (trigger, date).
+    Calls /event-actions for an SO and returns 'MOVED' if a Moved action occurred,
+    otherwise returns 'PENDING'.
     """
     logger = logging.getLogger(__name__)
     url = f"https://nypl.preservica.com/api/entity/structural-objects/{uuid}/event-actions?start=0&max=100"
@@ -254,44 +263,36 @@ def fetch_latest_event_action(accesstoken, uuid, version):
     
     root = _get_entity_xml(accesstoken, url)
     if root is None:
-        return "UNKNOWN", None
+        return "PENDING", None
 
     actions = root.findall('.//xip:EventAction', namespaces)
     if not actions:
-        return "NO_ACTIONS", None
+        return "PENDING", None
     
-    # Sort actions by date descending to find the latest
-    # In the XML, <xip:Date> is a child of EventAction or Event
-    # The user example has <xip:Date> directly under EventAction and also inside Event.
-    # We'll look for the latest one.
-    
-    latest_action = None
     latest_date = None
+    moved_date = None
     
     for action in actions:
         date_elem = action.find('xip:Date', namespaces)
+        dt = None
         if date_elem is not None and date_elem.text:
             try:
                 dt = datetime.fromisoformat(date_elem.text.replace('Z', '+00:00'))
                 if latest_date is None or dt > latest_date:
                     latest_date = dt
-                    latest_action = action
             except:
                 pass
                 
-    if latest_action is not None:
-        cmd_type = latest_action.get('commandType', 'UNKNOWN')
-        # If commandType is 'command_create' or 'AddFragment' and it's an Ingest event, 
-        # we might want to call it INGEST.
-        event_elem = latest_action.find('xip:Event', namespaces)
-        if event_elem is not None:
-            event_type = event_elem.get('type', '')
-            if event_type:
-                return event_type.upper(), latest_date.isoformat()
+        if action.get('commandType') == 'Moved':
+            if dt:
+                moved_date = dt
+            else:
+                moved_date = datetime.now(pytz.utc)
+                
+    if moved_date:
+        return "MOVED", moved_date.isoformat()
         
-        return cmd_type.upper(), latest_date.isoformat()
-        
-    return "UNKNOWN", None
+    return "PENDING", latest_date.isoformat() if latest_date else None
 
 def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
     logger = logging.getLogger(__name__)
@@ -299,6 +300,36 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
 
     while True:
         try:
+            accesstoken = prsvapi.get_token(credential_set=credentials)
+            version = prsvapi.find_apiversion(credential_set=credentials)
+
+            # 1. Re-check PENDING items
+            pending_rows = get_pending_events()
+            if pending_rows:
+                # logger.info(f"Re-checking {len(pending_rows)} PENDING items...")
+                for key, json_str in pending_rows:
+                    try:
+                        data = json.loads(json_str)
+                        uuid = data['events'][0]['entityRef'].split('/')[-1]
+                        trigger, event_date = fetch_latest_event_action(accesstoken, uuid, version)
+                        
+                        if trigger == 'MOVED':
+                            if not event_date:
+                                event_date = datetime.now(pytz.utc).isoformat()
+                                
+                            # logger.info(f"PENDING item {uuid} has now MOVED!")
+                            data['trigger'] = 'MOVED'
+                            data['timestamp'] = event_date
+                            
+                            conn = sqlite3.connect(DB_FILE)
+                            c = conn.cursor()
+                            c.execute("UPDATE events SET trigger = ?, event_json = ? WHERE event_key = ?", ('MOVED', json.dumps(data), key))
+                            conn.commit()
+                            conn.close()
+                    except Exception as e:
+                        logger.error(f"Error checking pending item {key}: {e}")
+
+            # 2. Discover new items
             last_polled = get_last_polled_at()
             if not last_polled:
                 # First run: go back by lookback_hours
@@ -316,8 +347,6 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
                         pass
 
             logger.info(f"Polling Preservica for updates since {since_ts}...")
-            accesstoken = prsvapi.get_token(credential_set=credentials)
-            version = prsvapi.find_apiversion(credential_set=credentials)
             
             # Use the correct endpoint and parameter name 'date'
             url = f"https://nypl.preservica.com/api/entity/entities/updated-since"
@@ -339,6 +368,16 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
                     # Filtering: Structural Objects (SO) with numeric titles ONLY
                     if etype == 'SO' and re.match(r'^\d+$', title):
                         uuid = eref
+                        
+                        # PREVENT DUPLICATES: Check if tracked previously
+                        conn = sqlite3.connect(DB_FILE)
+                        c = conn.cursor()
+                        c.execute("SELECT 1 FROM events WHERE event_key LIKE ?", (f"POLL_{uuid}%",))
+                        exists = bool(c.fetchone())
+                        conn.close()
+
+                        if exists:
+                            continue
                         
                         # Call second endpoint to get event details
                         trigger, event_date = fetch_latest_event_action(accesstoken, uuid, version)
@@ -364,7 +403,7 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
                             # Start metadata fetch
                             meta_thread = threading.Thread(
                                 target=fetch_and_update_metadata,
-                                args=(event_data['events'][0]['entityRef'], credentials, event_key, container_db)
+                                args=(uuid, credentials, event_key, container_db)
                             )
                             meta_thread.start()
             
