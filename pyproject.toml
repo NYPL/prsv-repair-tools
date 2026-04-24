@@ -45,6 +45,7 @@ wav_to_flac = 'repair_tools.wav_to_flac:main'
 get_md5 = 'repair_tools.get_md5:main'
 prsv_webhook = 'repair_tools.prsv_webhook:main'
 prsv_polling = 'repair_tools.prsv_polling:main'
+flatten_media_dir = 'repair_tools.flatten_media_dir:main'
 
 
 [build-system]
