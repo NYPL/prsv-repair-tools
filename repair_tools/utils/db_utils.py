@@ -6,6 +6,7 @@ import logging
 import tempfile
 import shutil
 from datetime import datetime
+# pyrefly: ignore [missing-import]
 from flask import render_template_string
 
 def init_db(db_file):

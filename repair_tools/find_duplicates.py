@@ -9,7 +9,6 @@ import concurrent.futures
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-from repair_tools.archive import create_pkg_report
 from repair_tools.utils import prsv_api_helpers 
 from repair_tools.archive.create_pkg_report import requests_retry_session
 from repair_tools.utils.preservica_search_parse import PreservicaAPI

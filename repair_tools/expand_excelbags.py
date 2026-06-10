@@ -3,7 +3,6 @@ import logging
 import shutil
 import json
 import re
-import sys
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
