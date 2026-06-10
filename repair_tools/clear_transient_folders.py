@@ -1,3 +1,4 @@
+from repair_tools.utils.format_utils import print_standard_summary
 import argparse
 import logging
 import re
@@ -243,9 +244,7 @@ def main():
         logger.info("No matching packages found to move.")
         return
 
-    logger.info("="*60)
-    logger.info(f"Found {len(packages_to_move)} total packages to delete.")
-    logger.info("="*60)
+    logger.info(f"Found {len(packages_to_move)} total packages to move.")
 
     success_count = 0
     fail_count = 0
@@ -257,17 +256,17 @@ def main():
         else:
             logger.info(f"Moving '{p_title}'")
             if api.move_entity(p_uuid, args.deletion_ref):
-                # logger.info(f"SUCCESS: Moved '{p_title}'")
                 success_count += 1
             else:
                 logger.error(f"FAILURE: Could not move '{p_title}'")
                 fail_count += 1
 
-    logger.info("="*60)
-    logger.info("SUMMARY")
-    logger.info(f"Total Found: {len(packages_to_move)}")
-    logger.info(f"Moved:       {success_count}")
-    logger.info(f"Failed:      {fail_count}")
+    summary = {
+        "Total Found": len(packages_to_move),
+        "Moved":       success_count,
+        "Failed":      fail_count,
+    }
+    print_standard_summary("Summary", summary, logger=logger)
 
 if __name__ == "__main__":
     main()

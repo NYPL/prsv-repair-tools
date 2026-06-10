@@ -1,7 +1,9 @@
 import argparse
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from repair_tools.utils.format_utils import print_standard_summary
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -56,7 +58,7 @@ def get_bag_size(path: Path) -> int:
 def check_structure(base_path: Path, size_limit_gb: float, max_workers: int):
     if not base_path.exists() or not base_path.is_dir():
         print(f"Skipping invalid directory: {base_path}")
-        return set()
+        return {}
 
     print(f"Scanning bags in '{base_path}'...")
 
@@ -73,10 +75,9 @@ def check_structure(base_path: Path, size_limit_gb: float, max_workers: int):
                     print(f"Permission denied: {group_dir}")
     except PermissionError:
         print(f"Permission denied: {base_path}")
-        return set()
+        return {}
 
-    over_limit_parents = set()
-    found_large_bag = False
+    bad_dirs = {}
     
     print(f"Found {len(bags_to_scan)} targets. Calculating sizes...")
 
@@ -93,39 +94,27 @@ def check_structure(base_path: Path, size_limit_gb: float, max_workers: int):
                 size_gb = size_bytes / (1024**3)
 
                 if size_gb > size_limit_gb:
-                    found_large_bag = True
-                    over_limit_parents.add(bag_path.parent) 
-                    
-                    print(f"[OVER LIMIT] {bag_path.parent.name}/{bag_path.name}")
-                    print(f"   Size: {size_gb:.2f} GB")
-                    print("-" * 40)
+                    bad_dirs[str(bag_path)] = size_gb
                     
             except Exception as exc:
                 print(f"Error scanning {bag_path.name}: {exc}")
 
-    if not found_large_bag:
-        print(f"No bags in '{base_path}' exceeded {size_limit_gb} GB.\n")
-    else:
-        print("\n")
-    
-    return over_limit_parents
+    return bad_dirs
 
 def main():
     args = parse_args()
-    all_over_limit = set()
+    bad_dirs = {}
 
     for dir_path in args.directory:
-        result_set = check_structure(dir_path, args.limit, args.workers)
-        all_over_limit.update(result_set)
+        result_dict = check_structure(dir_path, args.limit, args.workers)
+        bad_dirs.update(result_dict)
 
-    if all_over_limit:
-        print("="*40)
-        print("SUMMARY: Base dirs containing large bags")
-        print("="*40)
-        for item in sorted(all_over_limit):
-            print(item)
+    if bad_dirs:
+        stats = {dirname: f"{total_gb:.2f} GB" for dirname, total_gb in bad_dirs.items()}
+        print_standard_summary("Base dirs containing large bags", stats)
+        sys.exit(1)
     else:
-        print("\nSummary: No bags exceeded the limit.")
+        print_standard_summary("Limit Check", {"Status": "No bags exceeded the limit."})
 
 if __name__ == "__main__":
     main()

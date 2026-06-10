@@ -1,4 +1,6 @@
 import argparse
+from repair_tools.utils.format_utils import print_standard_summary
+from repair_tools.utils.cli import extant_dir, list_of_paths, ExtendUnique as StoreListAction
 import logging
 import os
 import re
@@ -6,6 +8,7 @@ import boto3
 import datetime
 import json
 import shutil
+import subprocess
 from pathlib import Path
 from multiprocessing import Pool
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -15,36 +18,9 @@ import repair_tools.ami_scripts_imports.audio_to_mp4_converter as amp4
 import repair_tools.ami_scripts_imports.iso_transcoder_makemkv as iso_worker 
 import repair_tools.utils.aws_utils as aws_utils
 
-################# 
-def setup_logging(log_file: Path):
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-
-    # file handler
-    fh = logging.FileHandler(str(log_file), mode='a')
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
-
-    # console handler
-    console_formatter = logging.Formatter('%(levelname)s - %(message)s')
-    ch = logging.StreamHandler()
-    ch.setFormatter(console_formatter)
-    logger.addHandler(ch)
-    
-    # turn off noisy loggers
-    logging.getLogger('repair_tools').setLevel(logging.WARNING)
-    logging.getLogger('ffmpeg').setLevel(logging.WARNING) 
-    logging.getLogger('iso_transcoder_makemkv').setLevel(logging.INFO)
+from repair_tools.utils.logger_setup import setup_logging
 
 ################# 
-def extant_dir(p: str) -> str:
-    if not os.path.isdir(p):
-        raise argparse.ArgumentTypeError(f"{p} is not a directory")
-    return p
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -121,14 +97,14 @@ NUM_DOWNLOAD_THREADS = 8
 # make this an arg?
 ENABLE_ISO_TRANSCODE = False
 
-################# Functions
+################# 
 
 def json_datetime_serializer(obj):
     if isinstance(obj, datetime.datetime):
         return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
 
-################# Functions
+################# 
 
 def find_pm_files(pkg_dir: Path) -> list[Path]:
     pm_dir = pkg_dir / 'data' / 'PreservationMasters'
@@ -156,15 +132,18 @@ def create_sc_worker(task):
 
         for file in files_to_process:
             file_path = Path(file)
+            print(f"Starting transcode worker for {file_path.name}")
             
             sc_name = file_path.stem.replace('_pm', '_sc') + ".mp4"
             em_name = file_path.stem.replace('_pm', '_em') + ".mp4"
             
             if (sc_dir / sc_name).exists():
                 successful_files.append(sc_name)
+                print(f"Service copy already exists: {sc_name}")
                 continue
             if (sc_dir / em_name).exists():
                 successful_files.append(em_name) 
+                print(f"Service copy already exists: {em_name}")
                 continue
 
             try:
@@ -175,6 +154,7 @@ def create_sc_worker(task):
                     logging.info(f"Extracting ISO: {file_path.name}")
 
                     temp_mkv_dir = iso_worker.process_iso_with_makemkv(file_path, sc_dir)
+                    
                     
                     if temp_mkv_dir:
                         iso_basename = file_path.stem.replace("_pm", "")
@@ -195,7 +175,10 @@ def create_sc_worker(task):
                         if not iso_success:
                             raise RuntimeError(f"ISO transcoding failed for {file_path.name}")
                     else:
-                        raise RuntimeError(f"MakeMKV failed to extract {file_path.name}")
+                        logging.warning(f"MakeMKV failed to extract {file_path.name}. Checking if it is an audio/data CD-ROM ISO...")
+                        audio_iso_success = process_audio_iso(file_path, sc_dir)
+                        if not audio_iso_success:
+                            raise RuntimeError(f"MakeMKV failed to extract {file_path.name} and audio ISO processing fallback failed.")
 
                 elif file_path.suffix.lower() in {'.wav', '.flac'}:
                     target_sc_path = sc_dir / sc_name
@@ -205,11 +188,14 @@ def create_sc_worker(task):
                 
                 if (sc_dir / sc_name).exists():
                     successful_files.append(sc_name)
+                    print(f"Successfully created service copy: {sc_name}")
                 elif (sc_dir / em_name).exists():
                     successful_files.append(em_name)
+                    print(f"Successfully created service copy: {em_name}")
                 elif (sc_dir / file_path.with_suffix('.mp4').name).exists():
                     created = sc_dir / file_path.with_suffix('.mp4').name
                     created.rename(sc_dir / sc_name)
+                    print(f"Successfully created service copy: {sc_name}")
                     successful_files.append(sc_name)
                 elif file_path.suffix.lower() == '.iso':
                     split_files = list(sc_dir.glob(f"{file_path.stem.replace('_pm','')}*_sc.mp4"))
@@ -222,13 +208,118 @@ def create_sc_worker(task):
                     
             except Exception as e:
                 errors.append(f"Transcode failed for {file_path.name}: {e}")
-            
+        print(f"Finished transcode worker for {pkg_path.name}")    
         return pkg_path, successful_files, errors
     except Exception as e:
         return pkg_path, [], [f"Exception: {str(e)}"]
+
+def process_audio_iso(iso_path: Path, sc_dir: Path) -> bool: # this function added by gemini, double check
+    """
+    Attempt to extract a CD-ROM/audio/data ISO
+    and convert the audio files inside to .mp4 service copies.
+    """
+    import tempfile
+    
+    logging.info(f"Attempting to process ISO {iso_path.name} as an audio/data CD-ROM ISO.")
+    
+    temp_extract_dir = Path(tempfile.mkdtemp())
+    extracted = False
+    
+    # Try 7z / 7za first
+    for tool in ["7z", "7za", "/opt/homebrew/bin/7z", "/opt/homebrew/bin/7za"]:
+        try:
+            # Check if tool is available
+            subprocess.run([tool, "--help"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            logging.info(f"Extracting with {tool}...")
+            subprocess.run([tool, "x", f"-o{temp_extract_dir}", str(iso_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            extracted = True
+            break
+        except Exception:
+            continue
+            
+    # macOS fallback using hdiutil if 7z is not available
+    if not extracted and os.uname().sysname == "Darwin":
+        logging.info("7z not available. Attempting macOS hdiutil mount...")
+        mount_point = None
+        try:
+            mount_res = subprocess.run(
+                ["hdiutil", "mount", "-nobrowse", "-readonly", str(iso_path)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            for line in mount_res.stdout.splitlines():
+                if "/Volumes/" in line:
+                    mount_point = Path(line.split("/Volumes/")[-1].strip())
+                    mount_point = Path("/Volumes") / mount_point
+                    break
+            
+            if mount_point and mount_point.exists():
+                logging.info(f"Mounted successfully at {mount_point}. Copying files...")
+                shutil.copytree(mount_point, temp_extract_dir, dirs_exist_ok=True)
+                extracted = True
+        except Exception as e:
+            logging.warning(f"hdiutil mount failed: {e}")
+        finally:
+            if mount_point:
+                subprocess.run(["hdiutil", "detach", str(mount_point)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                
+    if not extracted:
+        logging.error(f"Failed to extract {iso_path.name}: No available tools (7z/7za/hdiutil).")
+        try:
+            shutil.rmtree(temp_extract_dir)
+        except Exception:
+            pass
+        return False
+        
+    try:
+        # Find all audio files recursively
+        audio_files = []
+        valid_audio_suffixes = {'.aif', '.aiff', '.wav', '.flac', '.mp3', '.m4a'}
+        for p in temp_extract_dir.rglob('*'):
+            if p.suffix.lower() in valid_audio_suffixes and not p.name.startswith('._'):
+                audio_files.append(p)
+                
+        if not audio_files:
+            logging.warning(f"No audio files found inside the extracted ISO {iso_path.name}.")
+            return False
+            
+        audio_files.sort(key=lambda x: x.name)
+        logging.info(f"Found {len(audio_files)} audio file(s) in ISO: {[f.name for f in audio_files]}")
+        
+        iso_basename = iso_path.stem.replace("_pm", "")
+        success = True
+        
+        for idx, audio_file in enumerate(audio_files, start=1):
+            if len(audio_files) > 1:
+                output_name = f"{iso_basename}f01r{str(idx).zfill(2)}_sc.mp4"
+            else:
+                output_name = f"{iso_basename}_sc.mp4"
+                
+            output_path = sc_dir / output_name
+            logging.info(f"Transcoding audio file {audio_file.name} -> {output_name}")
+            try:
+                amp4.convert_audio(str(audio_file), "mp4", output_file=str(output_path))
+            except Exception as trans_err:
+                logging.error(f"Failed to transcode {audio_file.name}: {trans_err}")
+                success = False
+                
+        return success
+        
+    finally:
+        try:
+            shutil.rmtree(temp_extract_dir)
+        except Exception as cleanup_err:
+            logging.warning(f"Failed to clean up temporary directory {temp_extract_dir}: {cleanup_err}")
     
 def build_s3_index(bucket_name, index_path):
     if index_path.exists():
+        creation_date = index_path.stat().st_ctime
+        now = datetime.datetime.now().timestamp()
+        if now - creation_date > 60 * 60 * 24 * 7: # 1 week
+            logging.info(f"Cached index is out of date. Refreshing...")
+            index_path.unlink()
+            return build_s3_index(bucket_name, index_path)
         logging.info(f"Loading cached index from {index_path}.")
         with open(index_path, 'r') as f:
             raw_list = json.load(f)
@@ -283,50 +374,37 @@ def download_file_worker(task):
         return pkg_path, pm_filename, f"Error downloading {key}: {e}", False
 
 def print_summary(stats, package_status):
-    total_sc_secured = stats['dl_success'] + stats['tc_success']
-    match = total_sc_secured == stats['pm_found']
+    total_sc_secured = stats["dl_success"] + stats["tc_success"]
+    match = total_sc_secured == stats["pm_found"]
     
-    print("\n" + "="*60)
-    print(f"{'DOWNLOAD/TRANSCODE SUMMARY':^60}")
-    print("="*60)
-    print(f"Total Packages Scanned:   {stats['total']}")
-    print("-" * 60)
-    print(f"PM Files Found:           {stats['pm_found']}")
-    print(f"SC Files Secured:         {total_sc_secured}")
+    summary_dict = {
+        "Total Packages Scanned": stats["total"],
+        "PM Files Found": stats["pm_found"],
+        "SC Files Secured": total_sc_secured,
+        "Overall Status": "MATCH (All PMs have an SC)" if match else f"MISMATCH (Expected {stats["pm_found"]}, got {total_sc_secured})",
+        "S3 Downloads": stats["dl_success"],
+        "Local Transcodes": stats["tc_success"],
+        "Failed Downloads": stats["dl_fail"],
+        "Failed Transcodes": stats["tc_fail"],
+        "Packages Moved to Fixed": stats["moved"]
+    }
     
-    if match:
-         print(f"Overall Status:           MATCH (All PMs have an SC)")
-    else:
-         print(f"Overall Status:           MISMATCH (Expected {stats['pm_found']}, got {total_sc_secured})")
-
-    print("-" * 60)
-    print(f"  > S3 Downloads:         {stats['dl_success']}")
-    print(f"  > Local Transcodes:     {stats['tc_success']}")
-    print(f"  > Failed Downloads:     {stats['dl_fail']}")
-    print(f"  > Failed Transcodes:    {stats['tc_fail']}")
-    print("-" * 60)
-    print(f"Packages Moved to Fixed:  {stats['moved']}")
-    print("-" * 60)
-    
-    failed_pkgs = [p for p, data in package_status.items() if len(data['secured_pms']) != len(data['expected_pms'])]
-    
+    failed_pkgs = [p for p, data in package_status.items() if len(data["secured_pms"]) != len(data["expected_pms"])]
     if failed_pkgs:
-        print("\n[FAILED PACKAGES & MISSING FILES]")
+        summary_dict["Failed Packages"] = {}
         for p in failed_pkgs:
             data = package_status[p]
-            missing_files = data['expected_pms'] - data['secured_pms']
-            secured_count = len(data['secured_pms'])
-            total_count = len(data['expected_pms'])
+            missing_files = data["expected_pms"] - data["secured_pms"]
+            secured_count = len(data["secured_pms"])
+            total_count = len(data["expected_pms"])
             
-            print(f"  X {p.name}: {secured_count}/{total_count} secured.")
-            for mf in missing_files:
-                 print(f"    - MISSING SC FOR: {mf}")
-            
-            if data['errors']:
-                for err in data['errors']:
-                    print(f"    - Error Log: {err}")
-            
-    print("="*60 + "\n")
+            summary_dict["Failed Packages"][p] = f"{secured_count}/{total_count} files secured"
+            if missing_files:
+                summary_dict["Failed Packages"][f"  Missing in {p}"] = list(missing_files)
+            if data.get("errors"):
+                summary_dict["Failed Packages"][f"  Errors in {p}"] = data["errors"]
+                
+    print_standard_summary("Download/Transcode Summary", summary_dict)
 
 def main():
 
@@ -336,7 +414,8 @@ def main():
 
     if not args.logpath.exists():
         args.logpath.mkdir(parents=True, exist_ok=True)
-    setup_logging(args.logpath / f"download_sc_{datetime.datetime.now():%Y%m%d}.log")
+    setup_logging(args.logpath / f"download_sc_{datetime.datetime.now():%Y%m%d}.log", noisy_loggers=['repair_tools', 'ffmpeg'])
+    logging.getLogger('iso_transcoder_makemkv').setLevel(logging.INFO)
 
     pkg_paths = []
     if args.package:

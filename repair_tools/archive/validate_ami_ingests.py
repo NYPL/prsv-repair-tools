@@ -21,6 +21,7 @@ from repair_tools.create_pkg_report import (
         requests_retry_session
     )
 import repair_tools.utils.prsv_api as prsvapi
+import repair_tools.utils.prsv_api_helpers as prsvapi_helpers
 
 IGNORED_FILES = {
     ".DS_Store",
@@ -101,69 +102,6 @@ def get_local_files(ami_path):
                 
     return files
 
-def get_preservica_objects(api, package_uuid, credentials_name, logger):
-    """
-    Uses functions from create_pkg_report.py to traverse the package and get filenames 
-    and their file sizes.
-    Returns:
-        file_data: dict {filename: filesize}
-        io_titles: set {io_title}
-    """
-    file_data = {}
-    io_titles = set()
-    
-    session = requests_retry_session()
-
-    version = None
-    for attempt in range(3):
-        try:
-            version = prsvapi.find_apiversion(credentials_name)
-            break # Success, exit loop
-        except Exception as e:
-            if attempt < 2:
-                logger.warning(f"Attempt {attempt + 1} failed to determine API version: {e}. Retrying in 1s...")
-                time.sleep(1)
-            else:
-                logger.warning(f"Final attempt failed. Could not determine API version, defaulting to 8.0: {e}")
-            version = "8.0"
-
-    namespaces = {
-        'xip': f'http://preservica.com/XIP/v{version}',
-        'entity': f'http://preservica.com/EntityAPI/v{version}'
-    }
-
-    # ignore child SOs list
-    child_so_refs = [] 
-    io_info_list = []
-    
-    try:
-        find_all_children(api.token, version, package_uuid, child_so_refs, io_info_list, session, namespaces)
-    except Exception as e:
-        logger.error(f"Error traversing package children: {e}")
-        return file_data, io_titles
-
-    # iterate through IOs
-    for io_info in io_info_list:
-        io_ref = io_info['ref']
-        # record IO Title 
-        if io_info.get('title'):
-            io_titles.add(io_info['title'])
-        
-        # get reps
-        reps = get_representation_details(api.token, version, io_ref, session, namespaces)
-        
-        for rep in reps:
-            co_refs = get_generation_details(api.token, version, io_ref, rep['type'], session, namespaces)
-            
-            for co_ref in co_refs:
-                bitstream = get_bitstream_details(api.token, version, co_ref, session, namespaces)
-                
-                if bitstream and bitstream.get('filename'):
-                    file_data[bitstream['filename']] = bitstream.get('filesize')
-                else:
-                    logger.warning(f"Found CO {co_ref} without a valid filename bitstream.")
-
-    return file_data, io_titles
 
 def validate_package(api, ami_id, ami_paths, credentials_name, logger, list_logger, args_verbose=False):
     """
@@ -196,7 +134,7 @@ def validate_package(api, ami_id, ami_paths, credentials_name, logger, list_logg
 
     # Preservica files {filename: size} & IO titles
     try:
-        preservica_files, preservica_io_titles = get_preservica_objects(api, package_uuid, credentials_name, logger)
+        preservica_files, preservica_io_titles = prsvapi_helpers.get_preservica_objects(api, package_uuid, credentials_name, logger)
     except Exception as e:
         logger.error(f"Error retrieving files from Preservica for {ami_id}: {e}")
         return False

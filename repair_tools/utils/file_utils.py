@@ -32,6 +32,24 @@ def _is_six_digit_dir(name: str) -> bool:
     """Checks if a string is a 6-digit number."""
     return len(name) == 6 and name.isdigit()
 
+def find_package_files(pkg_path: Path, folders: list) -> list:
+    """Finds all files in the specified subfolders of the package data directory.
+    
+    Args:
+        pkg_path: Path to the package root directory.
+        folders: List of subfolder names (e.g. ['PreservationMasters', 'ServiceCopies']).
+    Returns:
+        List of matching file Paths.
+    """
+    files = []
+    for folder in folders:
+        target_dir = pkg_path / 'data' / folder
+        if target_dir.exists() and target_dir.is_dir():
+            files.extend([f for f in target_dir.rglob("*") if f.is_file() and not f.name.startswith("._")])
+        else:
+            logger.warning(f"Directory not found: {target_dir}")
+    return files
+
 def _find_matching_dirs(root: str, dirs: List[str]) -> Dict[str, List[str]]:
     """Finds 6-digit directories in a list and returns a dict."""
     matches = {}

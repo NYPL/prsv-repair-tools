@@ -2,7 +2,8 @@ import hashlib
 import logging
 import sys
 from pathlib import Path
-from repair_tools.cli import Parser
+from repair_tools.utils.cli import Parser
+from repair_tools.utils.file_utils import find_package_files
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,16 +24,6 @@ def calculate_md5(file_path: Path, block_size: int = 65536) -> str:
         return None
     return md5.hexdigest()
 
-def find_files(pkg_path: Path, folders: list[str]) -> list[Path]:
-    """Finds all files in the specified subfolders of the package data directory."""
-    files = []
-    for folder in folders:
-        target_dir = pkg_path / 'data' / folder
-        if target_dir.exists() and target_dir.is_dir():
-            files.extend([f for f in target_dir.rglob("*") if f.is_file() and not f.name.startswith("._")])
-        else:
-            logger.warning(f"Directory not found: {target_dir}")
-    return files
 
 def main():
     parser = Parser(description='Get MD5 checksums for files in PreservationMasters and/or ServiceCopies subfolders.')
@@ -60,7 +51,7 @@ def main():
 
     for pkg in args.packages:
         logger.info(f"Scanning package: {pkg}")
-        files = find_files(pkg, folders)
+        files = find_package_files(pkg, folders)
         
         if not files:
             logger.info(f"No files found in {folders} for package {pkg.name}")

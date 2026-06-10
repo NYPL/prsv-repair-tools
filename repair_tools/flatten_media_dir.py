@@ -40,14 +40,13 @@ def flatten_directory(directory: Path) -> dict:
         stats["errors"] += 1
         return stats
 
-    target_subs = {"Video", "Film", "Audio"}
+    target_subs = {"Video", "Film", "Audio", "CD", "Data", "DVD", "VCD"}
     
     for sub_name in target_subs:
         sub_path = directory / sub_name
         if sub_path.is_dir():
             logger.info(f"Processing {sub_path}...")
             
-            # Move all contents
             for item in sub_path.iterdir():
                 dest = directory / item.name
                 

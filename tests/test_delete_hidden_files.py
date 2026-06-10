@@ -59,3 +59,25 @@ def test_package_has_hidden_folder(good_package: Path, caplog):
 
     assert not hidden_folder.exists()
 
+
+def test_package_has_hidden_file_permission_denied(good_package: Path, caplog, monkeypatch):
+    hidden_package = good_package
+    folder = hidden_package / "data" / "folder"
+    folder.mkdir()
+    hidden_file = folder / ".DS_Store"
+    hidden_file.touch()
+
+    # Mock Path.unlink to raise PermissionError
+    def mock_unlink(self, *args, **kwargs):
+        raise PermissionError("Permission denied simulation")
+    
+    monkeypatch.setattr(Path, "unlink", mock_unlink)
+
+    # Calling get_hidden_files should not crash, it should just log a warning
+    with caplog.at_level(logging.WARNING):
+        dh_files.get_hidden_files(hidden_package)
+        
+    assert hidden_file.exists()  # The file couldn't be deleted
+    assert any("Could not remove macOS metadata file" in record.message for record in caplog.records)
+
+

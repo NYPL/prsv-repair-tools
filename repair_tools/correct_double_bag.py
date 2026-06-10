@@ -3,7 +3,7 @@ import logging
 import subprocess
 import shutil
 from pathlib import Path
-import repair_tools.cli as cli
+import repair_tools.utils.cli as cli
 
 logging.basicConfig(level=logging.INFO)
 

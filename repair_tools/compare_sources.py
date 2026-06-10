@@ -1,5 +1,6 @@
 import sys
 import argparse
+from repair_tools.utils.cli import extant_dir, list_of_paths, ExtendUnique as StoreListAction
 import logging
 import os
 import configparser
@@ -11,6 +12,7 @@ import repair_tools.prsv_move as prsv_move
 import repair_tools.utils.file_utils as file_utils
 from repair_tools.utils.preservica_search_parse import PreservicaAPI
 from repair_tools.utils.logger_setup import setup_logging
+from repair_tools.utils.format_utils import print_standard_summary
 
 #############################
 SCRIPT_DIR = Path(__file__).parent
@@ -44,11 +46,6 @@ DELETION_LIST_PATH = Path(PATHS.get('DELETION_LIST_PATH', 'complete_reingest.txt
 LOG_PATH_DEFAULT = Path(PATHS.get('LOG_PATH', 'compare_sources_logs_index'))
 #############################
 
-def extant_dir(p: str) -> Path:
-    path = Path(p)
-    if not path.is_dir():
-        raise argparse.ArgumentTypeError(f"{path} is not a directory")
-    return path
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -334,23 +331,20 @@ def main():
                 except Exception as e:
                     logger.error(f"Could not verify if source is empty: {e}")
     
-    print("\n --- COMPARE SUMMARY --- ")
-    logger.info(f"Total packages checked: {len(source_dirs)}")
-    logger.info(f"Found in Preservica: {len(prsv_uuids)}")
-    logger.info(f"Found in target only: {len(index_uuids)}")
-    logger.info(f"Missing from all: {len(missing_dirs)}\n")
-  
-    logger.info(f"Failed checks ({len(failed_checks)}): {failed_checks}")
-
+    summary = {
+        "Total Checked":    len(source_dirs),
+        "In Preservica":    len(prsv_uuids),
+        "In Target Only":   len(index_uuids),
+        "Missing from All": len(missing_dirs),
+        "Failed Checks":    len(failed_checks),
+    }
     if args.copydir or args.movedir:
-        print("\n --- OPERATION SUMMARY --- ")
-        print(f"Successful: {successful_ops}")
-        print(f"Skipped: {len(skipped_items)}")
-        print(f"Failed: {len(failed_items)}")
+        summary["Successful Operations"] = successful_ops
+        summary["Skipped"]               = len(skipped_items)
+        summary["Failed Operations"]     = len(failed_items)
         if failed_items:
-            logger.error("Failed items:")
-            for item, reason in failed_items.items():
-                logger.error(f" - {item}: {reason}")
+            summary["Failed Items"] = [f"{item}: {reason}" for item, reason in failed_items.items()]
+    print_standard_summary("Compare Summary", summary, logger=logger)
 
     if not missing_dirs and not failed_items:
         print(f"All packages found in Preservica or target directory. Deleting index cache files and log file.")

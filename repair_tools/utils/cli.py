@@ -29,6 +29,7 @@ class Parser(argparse.ArgumentParser):
         self.add_argument(
             "--directory",
             type=list_of_paths,
+            nargs="+",
             dest="packages",
             action=ExtendUnique,
             help="path to a directory of packages",
@@ -96,9 +97,13 @@ class ExtendUnique(argparse.Action):
         items = getattr(namespace, self.dest, None)
 
         if items is None:
-            items = set(values)
-        elif isinstance(items, set):
-            items = items.union(values)
+            items = set()
+
+        for value in values:
+            if isinstance(value, list):
+                items.update(value)
+            else:
+                items.add(value)
 
         setattr(namespace, self.dest, items)
 
@@ -111,7 +116,7 @@ def list_of_paths(p: str) -> list[Path]:
             child_dirs.append(child)
 
     if not child_dirs:
-        raise argparse.ArgumentTypeError(f"{path} does not contain child directories")
+        return child_dirs
 
     return child_dirs
 

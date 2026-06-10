@@ -1,3 +1,4 @@
+from repair_tools.utils.format_utils import print_standard_summary
 import os
 import re
 import subprocess
@@ -191,18 +192,14 @@ def main():
 
     successful_count = len(processed_packages) - len(failed_package_ids)
     
-    logger.info("-" * 40)
-    logger.info("SUMMARY")
-    logger.info("-" * 40)
-    
-    logger.info(f"Packages Processed: {len(processed_packages)} "
-                f"[Successful: {successful_count}, Failed: {len(failed_package_ids)}]")
-    
+    summary = {
+        "Packages Processed": len(processed_packages),
+        "Successful":         successful_count,
+        "Failed":             len(failed_package_ids),
+    }
     if failed_package_ids:
-        failed_list = sorted(list(failed_package_ids))
-        logger.info(f"Failed Packages: {failed_list}")
-    else:
-        logger.info("Failed Packages: []")
+        summary["Failed Packages"] = sorted(list(failed_package_ids))
+    print_standard_summary("Summary", summary, logger=logger)
 
 if __name__ == "__main__":
     main()

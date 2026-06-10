@@ -2,6 +2,7 @@ import requests
 import json
 import xml.etree.ElementTree as ET
 import repair_tools.utils.prsv_api as prsvapi
+import repair_tools.utils.prsv_api_helpers as prsvapi_helpers
 import repair_tools.cli as prsvcli
 import logging
 import sys
@@ -194,27 +195,11 @@ def get_by_date_uuids(accesstoken: str, start_date: str, end_date: str, parentuu
     return uuids
 
 ########################
-def _get_entity_xml(accesstoken: str, session: requests.Session, url: str) -> Optional[ET.Element]:
-    """Helper to make a GET request and parse response."""
-    headers = {
-        "Preservica-Access-Token": accesstoken,
-        "accept": "application/xml;charset=UTF-8"
-    }
-    try:
-        response = session.get(url, headers=headers)
-        response.raise_for_status()
-        return ET.fromstring(response.text)
-    except requests.exceptions.RequestException as e:
-        logger.error(f"API request failed for URL {url}: {e}")
-        return None
-    except ET.ParseError as e:
-        logger.error(f"Failed to parse XML from URL {url}: {e}")
-        return None
 
 ########################
 def get_identifiers(accesstoken: str, version: str, entity_type: str, entity_ref: str, session: requests.Session, namespaces) -> str:
     url = f"https://nypl.preservica.com/api/entity/{entity_type}/{entity_ref}/identifiers"
-    root = _get_entity_xml(accesstoken, session, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, session, url)
     id_container = {}
     if root is not None:
 
@@ -237,7 +222,7 @@ def get_identifiers(accesstoken: str, version: str, entity_type: str, entity_ref
 def get_security_tag(accesstoken: str, version: str, entity_type: str, entity_ref: str, session: requests.Session, namespaces) -> str:
     """Gets sectags for SOs or IOs."""
     url = f"https://nypl.preservica.com/api/entity/{entity_type}/{entity_ref}"
-    root = _get_entity_xml(accesstoken, session, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, session, url)
     if root is not None:
         tag_element = root.find('.//xip:SecurityTag', namespaces)
         if tag_element is not None and tag_element.text:
@@ -247,7 +232,7 @@ def get_security_tag(accesstoken: str, version: str, entity_type: str, entity_re
 def get_metadata_fragments(accesstoken: str, version: str, entity_type: str, entity_ref: str, session: requests.Session, namespaces) -> str:
     """Gets and parses all mfrags."""
     entity_url = f"https://nypl.preservica.com/api/entity/{entity_type}/{entity_ref}"
-    entity_root = _get_entity_xml(accesstoken, session, entity_url)
+    entity_root = prsvapi_helpers._get_entity_xml(accesstoken, session, entity_url)
     if entity_root is None:
         return "Not Found"
     
@@ -265,7 +250,7 @@ def get_metadata_fragments(accesstoken: str, version: str, entity_type: str, ent
         if not mfrag_url:
             continue
 
-        mfrag_root = _get_entity_xml(accesstoken, session, mfrag_url)
+        mfrag_root = prsvapi_helpers._get_entity_xml(accesstoken, session, mfrag_url)
         if mfrag_root is None:
             continue
             
@@ -279,39 +264,12 @@ def get_metadata_fragments(accesstoken: str, version: str, entity_type: str, ent
 
     return "^".join(all_fragments_data)
 
-def get_pkg_title(accesstoken: str, pkg_uuid: str, version: str, session: requests.Session) -> Optional[str]:
-    """Gets SO title."""
-    url = f"https://nypl.preservica.com/api/entity/structural-objects/{pkg_uuid}"
-    root = _get_entity_xml(accesstoken, session, url)
-    if root is not None:
-        title_element = root.find(f".//{{http://preservica.com/XIP/v{version}}}Title")
-        if title_element is not None and title_element.text:
-            return title_element.text.strip()
-    
-    logger.warning(f"No title found for SO {pkg_uuid}")
-    return None
 
-def get_so_children(accesstoken: str, version: str, parent_uuid: str, session: requests.Session, namespaces) -> list:
-    """Gets direct children (SOs & IOs) of SO."""
-    url = f"https://nypl.preservica.com/api/entity/structural-objects/{parent_uuid}/children?start=0&max=100"
-    root = _get_entity_xml(accesstoken, session, url)
-    children_data = []
-    if root is not None:
-        for child in root.findall('.//entity:Child', namespaces):
-            children_data.append({
-                'ref': child.get('ref'),
-                'type': child.get('type'),
-                'title': child.get('title')
-            })
-    else:
-        logger.error(f"Could not retrieve children for {parent_uuid}")
-
-    return children_data
 
 def get_co_details(accesstoken: str, version: str, co_ref: str, session: requests.Session, namespaces) -> dict:
     """Gets CO details, ie. title & parent IO."""
     url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}"
-    root = _get_entity_xml(accesstoken, session, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, session, url)
     details = {}
     if root is not None:
         title_element = root.find('.//xip:Title', namespaces)
@@ -327,7 +285,7 @@ def get_co_details(accesstoken: str, version: str, co_ref: str, session: request
 def get_generation_number(accesstoken: str, version: str, co_ref: str, session: requests.Session, namespaces) -> Optional[str]:
     """Gets CO generation number."""
     url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations"
-    root = _get_entity_xml(accesstoken, session, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, session, url)
     if root is not None:
         gen_url_element = root.find('.//entity:Generations/entity:Generation', namespaces)
         if gen_url_element is not None and gen_url_element.text:
@@ -339,7 +297,7 @@ def get_generation_number(accesstoken: str, version: str, co_ref: str, session: 
 def get_formats(accesstoken: str, version: str, co_ref: str, generation: str, session: requests.Session, namespaces) -> str:
     """Gets all CO formats."""
     url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations/{generation}"
-    root = _get_entity_xml(accesstoken, session, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, session, url)
     formats = []
     if root is not None:
         for elem in root.findall('.//xip:Formats/xip:Format/xip:PUID', namespaces):
@@ -354,7 +312,7 @@ def get_formats(accesstoken: str, version: str, co_ref: str, generation: str, se
 def get_ingest_details(accesstoken: str, version: str, so_ref: str, session: requests.Session, namespaces) -> dict:
     """Gets SO ingest event details."""
     url = f"https://nypl.preservica.com/api/entity/structural-objects/{so_ref}/event-actions"
-    root = _get_entity_xml(accesstoken, session, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, session, url)
     if root is not None:
         ingest_event = root.find('.//xip:EventAction[@commandType="command_create"]/xip:Event[@type="Ingest"]', namespaces)
         if ingest_event is not None:
@@ -371,7 +329,7 @@ def get_ingest_details(accesstoken: str, version: str, so_ref: str, session: req
 def get_representation_details(accesstoken: str, version: str, io_ref: str, session: requests.Session, namespaces) -> list:
     """Gets representation details for IO."""
     url = f"https://nypl.preservica.com/api/entity/information-objects/{io_ref}/representations"
-    root = _get_entity_xml(accesstoken, session, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, session, url)
     rep_details = []
 
     type_counts = {}
@@ -394,7 +352,7 @@ def get_representation_details(accesstoken: str, version: str, io_ref: str, sess
 def get_generation_details(accesstoken: str, version: str, io_ref: str, rep_type: str, session: requests.Session, namespaces) -> list:
     """Gets CO refs from representation."""
     url = f"https://nypl.preservica.com/api/entity/information-objects/{io_ref}/representations/{rep_type}"
-    root = _get_entity_xml(accesstoken, session, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, session, url)
     co_refs = []
     if root is not None:
         for co in root.findall('.//xip:ContentObjects/xip:ContentObject', namespaces):
@@ -412,7 +370,7 @@ def get_generation_details(accesstoken: str, version: str, io_ref: str, rep_type
 def get_bitstream_details(accesstoken: str, version: str, co_ref: str, session: requests.Session, namespaces) -> Optional[dict]:
     """Gets bitstream details for CO."""
     latest_gen_url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations/latest-active"
-    gen_root = _get_entity_xml(accesstoken, session, latest_gen_url)
+    gen_root = prsvapi_helpers._get_entity_xml(accesstoken, session, latest_gen_url)
     bitstream_url = None
     if gen_root is not None:
         bitstream_element = gen_root.find('.//entity:Bitstream', namespaces)
@@ -423,7 +381,7 @@ def get_bitstream_details(accesstoken: str, version: str, co_ref: str, session: 
         logger.warning(f"No bitstream URL found for CO {co_ref}")
         return None
 
-    root = _get_entity_xml(accesstoken, session, bitstream_url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, session, bitstream_url)
     if root is None:
         return None
         
@@ -444,26 +402,11 @@ def get_bitstream_details(accesstoken: str, version: str, co_ref: str, session: 
 
     return details
 
-def find_all_children(accesstoken: str, version: str, parent_uuid: str, so_list: list, io_list: list, session: requests.Session, namespaces):
-    """Recursively finds all SO & IO children, storing IOs w/ their parent SO."""
-    children = get_so_children(accesstoken, version, parent_uuid, session, namespaces)
-    
-    for child in children:
-        ref = child['ref']
-        entity_type = child['type']
-        title = child['title']
-
-        if entity_type == 'IO':
-            io_list.append({'ref': ref, 'title': title, 'parent_so_ref': parent_uuid})
-            # INSERT ADDITIONAL CO SEARCH HERE
-        elif entity_type == 'SO':
-            so_list.append(ref)
-            find_all_children(accesstoken, version, ref, so_list, io_list, session, namespaces)
 
 def generate_package_dataframe(start_uuid: str, accesstoken: str, version: str, session: requests.Session, namespaces) -> Tuple[Optional[str], Optional[pd.DataFrame]]:
     """Process a single package to return a df."""
 
-    pkg_title = get_pkg_title(accesstoken, start_uuid, version, session)
+    pkg_title = prsvapi_helpers.get_pkg_title(accesstoken, start_uuid, version, session)
     if not pkg_title:
         logger.error(f"Could not retrieve pkg title for {start_uuid}, skipping.")
         return None, None
@@ -477,7 +420,7 @@ def generate_package_dataframe(start_uuid: str, accesstoken: str, version: str, 
     ingest_info = get_ingest_details(accesstoken, version, start_uuid, session, namespaces)
     
     child_so_refs, io_info_list = [], []
-    find_all_children(accesstoken, version, start_uuid, child_so_refs, io_info_list, session, namespaces)
+    prsvapi_helpers.find_all_children(accesstoken, version, start_uuid, child_so_refs, io_info_list, session, namespaces)
     
     if not io_info_list:
         logger.warning(f"No IOs found for {pkg_title}.\n")
@@ -490,7 +433,7 @@ def generate_package_dataframe(start_uuid: str, accesstoken: str, version: str, 
     for so_ref in all_so_refs:
         if so_ref not in so_details_cache:
             so_details_cache[so_ref] = {
-                'title': get_pkg_title(accesstoken, so_ref, version, session),
+                'title': prsvapi_helpers.get_pkg_title(accesstoken, so_ref, version, session),
                 'security_tag': get_security_tag(accesstoken, version, 'structural-objects', so_ref, session, namespaces),
                 'mfrags': get_metadata_fragments(accesstoken, version, 'structural-objects', so_ref, session, namespaces),
                 'ids': get_identifiers(accesstoken, version, 'structural-objects', so_ref, session, namespaces)
@@ -659,7 +602,7 @@ def create_report(
         accesstoken = prsvapi.get_token(credentials)
         
         if not return_df and output_dir is not None:
-            pkg_title_check = get_pkg_title(accesstoken, start_uuid, version, session)
+            pkg_title_check = prsvapi_helpers.get_pkg_title(accesstoken, start_uuid, version, session)
             if not pkg_title_check:
                 logger.error(f"Could not get title for {start_uuid}, skipping.")
             else:

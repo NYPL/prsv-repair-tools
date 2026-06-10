@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import repair_tools.utils.prsv_api as prsvapi
-import repair_tools.cli as prsvcli
+import repair_tools.utils.cli as prsvcli
+import repair_tools.utils.db_utils as db_utils
+import repair_tools.utils.prsv_api_helpers as prsvapi_helpers
+from repair_tools.utils.logger_setup import setup_logging
 
 # create app
 app = Flask(__name__)
@@ -26,25 +29,7 @@ app = Flask(__name__)
 DB_FILE = Path.cwd() / "databases/webhook_events.db"
 
 # --- SETUP LOGGER ---
-def setup_logging(log_file: Path):
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    
-    # clear existing handlers
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    # file handler
-    log_file_formatter = logging.Formatter('%(asctime)s - %(threadName)s - %(levelname)s - %(message)s')
-    fh = logging.FileHandler(str(log_file), mode='a')
-    fh.setFormatter(log_file_formatter)
-    logger.addHandler(fh)
-
-    # console handler
-    console_formatter = logging.Formatter('%(threadName)s - %(levelname)s - %(message)s')
-    ch = logging.StreamHandler()
-    ch.setFormatter(console_formatter)
-    logger.addHandler(ch)
+# Imported from logger_setup
 
 def parse_args():
     parser = prsvcli.Parser()
@@ -87,167 +72,7 @@ def parse_args():
     )
     return parser.parse_args()
 
-def init_db():
-    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_key TEXT UNIQUE, 
-            trigger TEXT NOT NULL,
-            event_json TEXT NOT NULL,
-            received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    # Track the last successful poll time
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    ''')
-    
-    try:
-        c.execute("ALTER TABLE events ADD COLUMN CO_md5 TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE events ADD COLUMN package_title TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE events ADD COLUMN container_name TEXT")
-    except sqlite3.OperationalError:
-        pass
-    conn.commit()
-    conn.close()
-
-def get_last_polled_at():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key = 'last_polled_at'")
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else None
-
-def set_last_polled_at(timestamp_str):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_polled_at', ?)", (timestamp_str,))
-    conn.commit()
-    conn.close()
-
-def insert_event(trigger, event_json, event_key):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    # Use INSERT OR IGNORE to prevent duplicates during lookbacks
-    c.execute(
-        "INSERT OR IGNORE INTO events (event_key, trigger, event_json) VALUES (?, ?, ?)",
-        (event_key, trigger, event_json)
-    )
-    was_inserted = conn.total_changes > 0
-    conn.commit()
-    conn.close()
-    return was_inserted
-
-def get_pending_events():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT event_key, event_json FROM events WHERE trigger = 'PENDING'")
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-def get_events():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "SELECT event_json, received_at, CO_md5, package_title, container_name FROM events ORDER BY received_at DESC"
-    )
-    rows = c.fetchall()
-    conn.close()
-    
-    all_events = []
-    for event_json, received_at, CO_md5, pkg_title, cont_name in rows:
-        event = json.loads(event_json)
-        event["_received_at"] = received_at
-        event["package_title"] = pkg_title or "N/A"
-        event["container_name"] = cont_name or "N/A"
-        all_events.append(event)
-    return all_events
-
-def update_event_metadata(event_key, package_title, container_name):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "UPDATE events SET package_title = ?, container_name = ? WHERE event_key = ?",
-        (package_title, container_name, event_key)
-    )
-    conn.commit()
-    conn.close()
-
-def lookup_container_name(db_path, package_title):
-    if not db_path or not package_title or package_title == "N/A":
-        return None
-    
-    temp_db = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tf:
-            temp_db = tf.name
-        shutil.copy2(db_path, temp_db)
-        conn = sqlite3.connect(temp_db)
-        c = conn.cursor()
-        query = "SELECT container_name FROM workflows WHERE container_name LIKE ?"
-        c.execute(query, (f"%{package_title}%",))
-        row = c.fetchone()
-        conn.close()
-        return row[0] if row else None
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Error querying container DB: {e}")
-        return None
-    finally:
-        if temp_db and os.path.exists(temp_db):
-            try:
-                os.remove(temp_db)
-            except:
-                pass
-
-def fetch_and_update_metadata(entity_ref, credentials_to_use, event_key, container_db_path):
-    logger = logging.getLogger(__name__)
-    try:
-        accesstoken = prsvapi.get_token(credential_set=credentials_to_use)
-        uuid = entity_ref.split('/')[-1]
-        title = get_pkg_title(accesstoken, uuid)
-        if not title:
-            title = "Title Not Found"
-        container_name = lookup_container_name(container_db_path, title)
-        update_event_metadata(event_key, title, container_name)
-        logger.info(f"Updated metadata for {event_key}: Title={title}, Container={container_name}")
-    except Exception as e:
-        logger.error(f"Error in metadata fetch for {entity_ref}: {e}")
-
-def get_pkg_title(accesstoken: str, pkg_uuid: str) -> str:
-    get_so_url = f"https://nypl.preservica.com/api/entity/structural-objects/{pkg_uuid}"
-    headers = {"Preservica-Access-Token": accesstoken, "Accept": "application/xml"}
-    res = requests.get(get_so_url, headers=headers)
-    if res.status_code != 200: return None
-    root = ET.fromstring(res.text)
-    version_search = re.search(r"v(\d+\.\d+)\}", root.tag)
-    version = version_search.group(1) if version_search else "7.0"
-    title = root.find(f".//{{http://preservica.com/XIP/v{version}}}Title")
-    return title.text.strip() if title is not None else None
-
-def _get_entity_xml(accesstoken: str, url: str, params: dict = None) -> Optional[ET.Element]:
-    headers = {"Preservica-Access-Token": accesstoken, "accept": "application/xml;charset=UTF-8"}
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        return ET.fromstring(response.text)
-    except Exception as e:
-        full_url = response.url if 'response' in locals() else url
-        logging.getLogger(__name__).error(f"API request failed for URL {full_url}: {e}")
-        return None
+# DB and API helpers imported from utils
 
 def fetch_latest_event_action(accesstoken, uuid, version):
     """
@@ -261,7 +86,7 @@ def fetch_latest_event_action(accesstoken, uuid, version):
         'xip': f'http://preservica.com/XIP/v{version}'
     }
     
-    root = _get_entity_xml(accesstoken, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, url)
     if root is None:
         return "PENDING", None
 
@@ -304,7 +129,7 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
             version = prsvapi.find_apiversion(credential_set=credentials)
 
             # 1. Re-check PENDING items
-            pending_rows = get_pending_events()
+            pending_rows = db_utils.get_pending_events(DB_FILE)
             if pending_rows:
                 # logger.info(f"Re-checking {len(pending_rows)} PENDING items...")
                 for key, json_str in pending_rows:
@@ -330,7 +155,7 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
                         logger.error(f"Error checking pending item {key}: {e}")
 
             # 2. Discover new items
-            last_polled = get_last_polled_at()
+            last_polled = db_utils.get_last_polled_at(DB_FILE)
             if not last_polled:
                 # First run: go back by lookback_hours
                 since_dt = datetime.now(pytz.utc) - timedelta(hours=lookback_hours)
@@ -352,7 +177,7 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
             url = f"https://nypl.preservica.com/api/entity/entities/updated-since"
             params = {'date': since_ts, 'start': 0, 'max': 100}
             namespaces = {'entity': f'http://preservica.com/EntityAPI/v{version}'}
-            root = _get_entity_xml(accesstoken, url, params=params)
+            root = prsvapi_helpers._get_entity_xml(accesstoken, url, params=params)
             
             new_poll_time = datetime.now(pytz.utc).strftime('%Y-%m-%dT%H:%M:%S.000+0000')
 
@@ -396,18 +221,18 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
                         }
                         
                         # Insert into DB
-                        inserted = insert_event(trigger, json.dumps(event_data), event_key)
+                        inserted = db_utils.insert_event(DB_FILE, trigger, json.dumps(event_data), event_key)
                         
                         if inserted:
                             logger.info(f"New Ingest Discovered: {title} (Trigger: {trigger})")
                             # Start metadata fetch
                             meta_thread = threading.Thread(
-                                target=fetch_and_update_metadata,
+                                target=db_utils.fetch_and_update_metadata,
                                 args=(uuid, credentials, event_key, container_db)
                             )
                             meta_thread.start()
             
-            set_last_polled_at(new_poll_time)
+            db_utils.set_last_polled_at(DB_FILE, new_poll_time)
             
         except Exception as e:
             logger.error(f"Error during polling cycle: {e}")
@@ -416,109 +241,20 @@ def poll_preservica(credentials, interval_mins, lookback_hours, container_db):
         time.sleep(interval_mins * 60)
 
 # --- DASHBOARD CODE ---
-
-DASHBOARD_TEMPLATE = """
-<!doctype html>
-<html>
-<head>
-  <title>Ingest Dashboard (Polling Mode)</title>
-  <meta http-equiv="refresh" content="60">
-  <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.css">
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2em; background-color: #f8f9fa; color: #212529; }
-    h1 { color: #28a745; }
-    .status-badge { font-size: 0.8em; padding: 2px 6px; border-radius: 4px; background: #eee; color: #666; margin-left: 10px; }
-    table.dataTable thead th { background-color: #e9ecef; }
-  </style>
-</head>
-<body>
-  <h1>Ingest Events <span class="status-badge">Polling Mode</span></h1>
-  {% if not events %}
-    <p>No packages discovered yet.</p>
-  {% else %}
-    <table id="webhook_table" class="display">
-      <thead>
-        <tr>
-          {% for header in headers %}
-            <th>{{ header.replace('_', ' ').title() }}</th>
-          {% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for item in events %}
-          <tr>
-            {% for header in headers %}
-              <td data-order="{{ item.get(header + '_sort', '') }}">{{ item.get(header, 'N/A') }}</td>
-            {% endfor %}
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% endif %}
-  <script type="text/javascript" charset="utf8" src="https://code.jquery.com/jquery-3.7.0.js"></script>
-  <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.js"></script>
-  <script>
-    $(document).ready(function() {
-        $('#webhook_table').DataTable({ "order": [[0, "desc"]], "pageLength": 25 });
-    });
-  </script>
-</body>
-</html>
-"""
-
 @app.route('/dashboard')
 def dashboard():
-    credentials = "prod-ingest"
-    accesstoken = prsvapi.get_token(credential_set=credentials)
-    events = get_events()
-    utc_zone, est_zone = pytz.utc, pytz.timezone('America/New_York')
-
-    processed_events = []
-    for item in events:
-        flat_item = {
-            '_received_at': str(item.get('_received_at')),
-            'package_title': item.get('package_title', 'N/A'),
-            'trigger': item.get('trigger'),
-            'container_name': item.get('container_name', 'N/A')
-        }
-
-        if flat_item['_received_at']:
-            try:
-                flat_item['_received_at_sort'] = flat_item['_received_at']
-                dt_str = flat_item['_received_at'].replace('Z', '+00:00')
-                utc_dt = datetime.fromisoformat(dt_str)
-                if utc_dt.tzinfo is None:
-                    utc_dt = utc_dt.replace(tzinfo=pytz.utc)
-                est_dt = utc_dt.astimezone(est_zone)
-                flat_item['_received_at'] = est_dt.strftime('%Y-%m-%d %I:%M:%S %p %Z')
-            except Exception as e: 
-                pass
-
-        if item.get('events'):
-            inner_event = item['events'][0]
-            entity_ref = inner_event.get('entityRef')
-            if entity_ref:
-                flat_item['entityRef'] = entity_ref.split('/')[-1]
-        
-        processed_events.append(flat_item)
-
-    all_keys = set()
-    for item in processed_events: all_keys.update(item.keys())
-    header_order = ['_received_at', 'package_title', 'container_name', 'trigger', 'entityRef']
-    exclude_list = {'_received_at_sort'}
-    headers = [h for h in all_keys if h.lower() not in exclude_list]
-    headers = sorted(headers, key=lambda x: (header_order.index(x) if x in header_order else len(header_order), x))
-
-    return render_template_string(DASHBOARD_TEMPLATE, headers=headers, events=processed_events)
+    events = db_utils.get_events(DB_FILE)
+    return db_utils.render_dashboard(events, mode="Polling Mode")
 
 def main():
     log_path = Path.cwd() / "webhook_logs"
     log_path.mkdir(parents=True, exist_ok=True)
-    setup_logging(log_file=Path(log_path / f"polling_prsv_{datetime.now().strftime('%Y%m%d')}_{datetime.now().strftime('%H%M')}.log"))
+    log_file = Path(log_path / f"polling_prsv_{datetime.now().strftime('%Y%m%d')}_{datetime.now().strftime('%H%M')}.log")
+    setup_logging(log_file, log_format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s', console_format='%(threadName)s - %(levelname)s - %(message)s')
     
     args = parse_args()
     app.config['CONTAINER_DB'] = args.container_db
-    init_db()
+    db_utils.init_db(DB_FILE)
     
     # Start the polling thread
     polling_thread = threading.Thread(

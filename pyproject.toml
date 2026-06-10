@@ -17,6 +17,7 @@ colorama = "^0.4.6"
 makemkv = "^0.3.1"
 flask = "^3.0.0"
 pytz = "^2024.1"
+openpyxl = "^3.1.5"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.1"
@@ -41,11 +42,13 @@ check_size = 'repair_tools.check_size:main'
 clear_transient_folders = 'repair_tools.clear_transient_folders:main'
 find_duplicates = 'repair_tools.find_duplicates:main'
 delete_0byte = 'repair_tools.delete_0byte:main'
-wav_to_flac = 'repair_tools.wav_to_flac:main'
 get_md5 = 'repair_tools.get_md5:main'
 prsv_webhook = 'repair_tools.prsv_webhook:main'
 prsv_polling = 'repair_tools.prsv_polling:main'
 flatten_media_dir = 'repair_tools.flatten_media_dir:main'
+delete_empty_folders = 'repair_tools.delete_empty_folders:main'
+transcode_media = 'repair_tools.transcode_media:main'
+expand_excelbags = 'repair_tools.expand_excelbags:main'
 
 
 [build-system]

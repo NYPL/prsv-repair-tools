@@ -1,3 +1,4 @@
+from repair_tools.utils.format_utils import print_standard_summary
 import argparse
 import logging
 from pathlib import Path
@@ -97,15 +98,15 @@ def process_move_list(credentials: str, pkg_list: list, new_parent_ref: str, lim
             logger.warning(f"NOT FOUND: '{pkg_title}' could not be found in source folders.")
             failed_moves.add(pkg_title)
 
-    logger.info("\n--- MOVE SUMMARY ---")
-    logger.info(f"Successful: {len(successful_moves)}")
-    logger.info(f"Already in Dest: {len(deletion_exists)}")
-    logger.info(f"Failed/Not Found: {len(failed_moves)}")
-    
+    summary = {
+        "Successful":      len(successful_moves),
+        "Already in Dest": len(deletion_exists),
+        "Failed/Not Found":len(failed_moves),
+    }
     if failed_moves:
-        for pkg in sorted(list(failed_moves)):
-            logger.info(f"- {pkg}")
-            
+        summary["Failed Packages"] = sorted(list(failed_moves))
+    print_standard_summary("Move Summary", summary, logger=logger)
+
     return len(failed_moves) == 0
 
 def main():

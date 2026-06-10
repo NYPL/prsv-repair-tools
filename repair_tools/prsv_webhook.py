@@ -17,7 +17,11 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import repair_tools.utils.prsv_api as prsvapi
-import repair_tools.cli as prsvcli
+import repair_tools.utils.cli as prsvcli
+
+import repair_tools.utils.db_utils as db_utils
+import repair_tools.utils.prsv_api_helpers as prsvapi_helpers
+from repair_tools.utils.logger_setup import setup_logging
 
 # create app
 app = Flask(__name__)
@@ -38,25 +42,7 @@ WEBHOOK_SECRET = get_webhook_secret()
 DB_FILE = Path.cwd() / "databases/webhook_events.db"
 
 # --- SETUP LOGGER ---
-def setup_logging(log_file: Path):
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    
-    # clear existing handlers
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    # file handler
-    log_file_formatter = logging.Formatter('%(asctime)s - %(threadName)s - %(levelname)s - %(message)s')
-    fh = logging.FileHandler(str(log_file), mode='a')
-    fh.setFormatter(log_file_formatter)
-    logger.addHandler(fh)
-
-    # console handler
-    console_formatter = logging.Formatter('%(threadName)s - %(levelname)s - %(message)s')
-    ch = logging.StreamHandler()
-    ch.setFormatter(console_formatter)
-    logger.addHandler(ch)
+# Imported from logger_setup
 
 def parse_args():
     parser = prsvcli.Parser()
@@ -94,143 +80,6 @@ def compute_hmac(secret, message):
         hashlib.sha256
     ).hexdigest()
 
-def init_db():
-    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_key TEXT UNIQUE, 
-            trigger TEXT NOT NULL,
-            event_json TEXT NOT NULL,
-            received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    try:
-        c.execute("ALTER TABLE events ADD COLUMN CO_md5 TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE events ADD COLUMN package_title TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE events ADD COLUMN container_name TEXT")
-    except sqlite3.OperationalError:
-        pass
-    conn.commit()
-    conn.close()
-
-def insert_event(trigger, event_json, event_key):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "INSERT OR IGNORE INTO events (event_key, trigger, event_json) VALUES (?, ?, ?)",
-        (event_key, trigger, event_json)
-    )
-    conn.commit()
-    conn.close()
-
-def get_events():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "SELECT event_json, received_at, CO_md5, package_title, container_name FROM events ORDER BY received_at DESC"
-    )
-    rows = c.fetchall()
-    conn.close()
-    
-    all_events = []
-    for event_json, received_at, CO_md5, pkg_title, cont_name in rows:
-        event = json.loads(event_json)
-        event["_received_at"] = received_at
-        event["package_title"] = pkg_title or "N/A"
-        event["container_name"] = cont_name or "N/A"
-        # if CO_md5:
-        #     try:
-        #         event["CO_md5"] = json.loads(CO_md5)
-        #     except:
-        #         event["CO_md5"] = CO_md5
-        # else:
-        #     event["CO_md5"] = "Not yet processed"
-        pass
-        all_events.append(event)
-    return all_events
-
-def update_bitstream_results(event_key, results_json):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "UPDATE events SET CO_md5 = ? WHERE event_key = ?",
-        (results_json, event_key)
-    )
-    conn.commit()
-    conn.close()
-
-def update_event_metadata(event_key, package_title, container_name):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "UPDATE events SET package_title = ?, container_name = ? WHERE event_key = ?",
-        (package_title, container_name, event_key)
-    )
-    conn.commit()
-    conn.close()
-
-def lookup_container_name(db_path, package_title):
-    if not db_path or not package_title or package_title == "N/A":
-        return None
-    
-    temp_db = None
-    try:
-        # Create a temporary copy to avoid issues if the original is being replaced/overwritten
-        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tf:
-            temp_db = tf.name
-        
-        shutil.copy2(db_path, temp_db)
-        
-        # Connect to the copy
-        conn = sqlite3.connect(temp_db)
-        c = conn.cursor()
-        # Search for package_title in container_name column using LIKE
-        query = "SELECT container_name FROM workflows WHERE container_name LIKE ?"
-        c.execute(query, (f"%{package_title}%",))
-        row = c.fetchone()
-        conn.close()
-        return row[0] if row else None
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Error querying container DB: {e}")
-        return None
-    finally:
-        # Clean up the temporary copy
-        if temp_db and os.path.exists(temp_db):
-            try:
-                os.remove(temp_db)
-            except:
-                pass
-
-def fetch_and_update_metadata(entity_ref, credentials_to_use, event_key, container_db_path):
-    logger = logging.getLogger(__name__)
-    try:
-        accesstoken = prsvapi.get_token(credential_set=credentials_to_use)
-        uuid = entity_ref.split('/')[-1]
-        
-        # 1. Get package title
-        title = get_pkg_title(accesstoken, uuid)
-        if not title:
-            title = "Title Not Found"
-            
-        # 2. Lookup container name
-        container_name = lookup_container_name(container_db_path, title)
-        
-        # 3. Update primary database
-        update_event_metadata(event_key, title, container_name)
-        logger.info(f"Updated metadata for {event_key}: Title={title}, Container={container_name}")
-        
-    except Exception as e:
-        logger.error(f"Error in metadata fetch for {entity_ref}: {e}")
-
 def retry_container_lookups(container_db_path, credentials_to_use="prod-ingest"):
     logger = logging.getLogger(__name__)
     conn = sqlite3.connect(DB_FILE)
@@ -259,32 +108,19 @@ def retry_container_lookups(container_db_path, credentials_to_use="prod-ingest")
                         if not accesstoken:
                             accesstoken = prsvapi.get_token(credential_set=credentials_to_use)
                         uuid = entity_ref.split('/')[-1]
-                        title = get_pkg_title(accesstoken, uuid)
+                        title = prsvapi_helpers.get_pkg_title(accesstoken, uuid)
             except Exception as e:
                 logger.error(f"Could not fetch title for retry on {event_key}: {e}")
         
         if title and title != "N/A":
-            container_name = lookup_container_name(container_db_path, title)
+            container_name = db_utils.lookup_container_name(container_db_path, title)
             if container_name or (pkg_title != title):
-                update_event_metadata(event_key, title, container_name)
+                db_utils.update_event_metadata(DB_FILE, event_key, title, container_name)
                 logger.info(f"Refreshed metadata for {event_key}: Title={title}, Container={container_name}")
-
-def _get_entity_xml(accesstoken: str, url: str) -> Optional[ET.Element]:
-    headers = {
-        "Preservica-Access-Token": accesstoken,
-        "accept": "application/xml;charset=UTF-8"
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        return ET.fromstring(response.text)
-    except Exception as e:
-        logging.getLogger(__name__).error(f"API request failed for URL {url}: {e}")
-        return None
 
 def get_so_children(accesstoken: str, parent_uuid: str, version: str, namespaces: dict) -> list:
     url = f"https://nypl.preservica.com/api/entity/structural-objects/{parent_uuid}/children?start=0&max=100"
-    root = _get_entity_xml(accesstoken, url)
+    root = prsvapi_helpers._get_entity_xml(accesstoken, url)
     children_data = []
     if root is not None:
         for child in root.findall('.//entity:Child', namespaces):
@@ -305,7 +141,7 @@ def find_all_children(accesstoken: str, parent_uuid: str, version: str, io_refs:
 def get_bitstreams_for_io(accesstoken: str, io_ref: str, version: str, namespaces: dict) -> list:
     # 1. Get representations
     rep_url = f"https://nypl.preservica.com/api/entity/information-objects/{io_ref}/representations"
-    rep_root = _get_entity_xml(accesstoken, rep_url)
+    rep_root = prsvapi_helpers._get_entity_xml(accesstoken, rep_url)
     bitstream_data = []
     
     if rep_root is None:
@@ -315,7 +151,7 @@ def get_bitstreams_for_io(accesstoken: str, io_ref: str, version: str, namespace
         rep_type = rep.get('type')
         # 2. Get COs for each representation
         co_url = f"https://nypl.preservica.com/api/entity/information-objects/{io_ref}/representations/{rep_type}"
-        co_root = _get_entity_xml(accesstoken, co_url)
+        co_root = prsvapi_helpers._get_entity_xml(accesstoken, co_url)
         if co_root is None:
             continue
             
@@ -328,7 +164,7 @@ def get_bitstreams_for_io(accesstoken: str, io_ref: str, version: str, namespace
         for co_ref in co_refs:
             # 3. Get generations for each CO
             gen_url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations"
-            gen_list_root = _get_entity_xml(accesstoken, gen_url)
+            gen_list_root = prsvapi_helpers._get_entity_xml(accesstoken, gen_url)
             if gen_list_root is None:
                 continue
                 
@@ -336,13 +172,13 @@ def get_bitstreams_for_io(accesstoken: str, io_ref: str, version: str, namespace
                 gen_id = gen_elem.text.split('/')[-1]
                 # 4. Get bitstreams for each generation
                 bs_list_url = f"https://nypl.preservica.com/api/entity/content-objects/{co_ref}/generations/{gen_id}"
-                bs_list_root = _get_entity_xml(accesstoken, bs_list_url)
+                bs_list_root = prsvapi_helpers._get_entity_xml(accesstoken, bs_list_url)
                 if bs_list_root is None:
                     continue
                     
                 for bs_elem in bs_list_root.findall('.//entity:Bitstream', namespaces):
                     bs_url = bs_elem.text
-                    bs_root = _get_entity_xml(accesstoken, bs_url)
+                    bs_root = prsvapi_helpers._get_entity_xml(accesstoken, bs_url)
                     if bs_root is None:
                         continue
                         
@@ -380,13 +216,13 @@ def crawl_for_bitstreams(entity_ref, credentials_to_use, event_key, update_callb
         if "structural-objects" in entity_ref or len(entity_ref) == 36:
             # Assume it might be an SO or a bare UUID which we treat as SO first
             so_url = f"https://nypl.preservica.com/api/entity/structural-objects/{entity_ref.split('/')[-1]}"
-            so_root = _get_entity_xml(accesstoken, so_url)
+            so_root = prsvapi_helpers._get_entity_xml(accesstoken, so_url)
             if so_root is not None:
                 find_all_children(accesstoken, entity_ref.split('/')[-1], version, io_refs, namespaces)
             else:
                 # Try as IO
                 io_url = f"https://nypl.preservica.com/api/entity/information-objects/{entity_ref.split('/')[-1]}"
-                io_root = _get_entity_xml(accesstoken, io_url)
+                io_root = prsvapi_helpers._get_entity_xml(accesstoken, io_url)
                 if io_root is not None:
                     io_refs.append(entity_ref.split('/')[-1])
         
@@ -446,7 +282,7 @@ def preservica_webhook():
     event_key = f"{data.get('subscriptionId','')}_{data.get('timestamp','')}"
     
     if trigger in ("MOVED", "INGEST_FAILED"):
-        insert_event(trigger, json.dumps(data), event_key)
+        db_utils.insert_event(DB_FILE, trigger, json.dumps(data), event_key)
 
     if data.get('events'):
         entity_ref = data['events'][0].get('entityRef')
@@ -469,17 +305,6 @@ def preservica_webhook():
             pass
 
     return "OK", 200
-
-def get_pkg_title(accesstoken: str, pkg_uuid: str) -> str:
-    get_so_url = f"https://nypl.preservica.com/api/entity/structural-objects/{pkg_uuid}"
-    headers = {"Preservica-Access-Token": accesstoken, "Accept": "application/xml"}
-    res = requests.get(get_so_url, headers=headers)
-    if res.status_code != 200: return None
-    root = ET.fromstring(res.text)
-    version_search = re.search(r"v(\d+\.\d+)\}", root.tag)
-    version = version_search.group(1) if version_search else "7.0"
-    title = root.find(f".//{{http://preservica.com/XIP/v{version}}}Title")
-    return title.text.strip() if title is not None else None
 
 title_cache = {}
 
@@ -537,7 +362,7 @@ def dashboard():
     global title_cache
     credentials = "prod-ingest"
     accesstoken = prsvapi.get_token(credential_set=credentials)
-    events = get_events()
+    events = db_utils.get_events(DB_FILE)
     utc_zone, est_zone = pytz.utc, pytz.timezone('America/New_York')
 
     processed_events = []
@@ -555,7 +380,6 @@ def dashboard():
 
         if flat_item['_received_at']:
             try:
-                # Store original timestamp for precise chronological sorting
                 flat_item['_received_at_sort'] = flat_item['_received_at']
                 utc_dt = datetime.fromisoformat(flat_item['_received_at'].split('.')[0])
                 est_dt = utc_zone.localize(utc_dt).astimezone(est_zone)
@@ -572,10 +396,9 @@ def dashboard():
             
             if entity_ref:
                 uuid = entity_ref.split('/')[-1]
-                # Fallback to cache if not already populated in DB (for older events)
                 if flat_item['package_title'] == 'N/A':
                     if uuid not in title_cache:
-                        title_cache[uuid] = get_pkg_title(accesstoken, uuid)
+                        title_cache[uuid] = prsvapi_helpers.get_pkg_title(accesstoken, uuid)
                     flat_item['package_title'] = title_cache[uuid] or "Title Not Found"
         
         processed_events.append(flat_item)
@@ -586,7 +409,6 @@ def dashboard():
         '_received_at', 'package_title', 'container_name', 'trigger',
         'entityRef', 'BatchId'
     ]
-    # exclude headers as requested (case-insensitive)
     exclude_list = {'co_md5', 'comd5', 'socategory', 'tenant', '_received_at_sort'}
     headers = [h for h in all_keys if h.lower() not in exclude_list]
     headers = sorted(headers, key=lambda x: (header_order.index(x) if x in header_order else len(header_order), x))
@@ -596,11 +418,12 @@ def dashboard():
 def main():
     log_path = Path.cwd() / "webhook_logs"
     log_path.mkdir(parents=True, exist_ok=True)
-    setup_logging(log_file=Path(log_path / f"webhook_prsv_{datetime.now().strftime('%Y%m%d')}_{datetime.now().strftime('%H%M')}.log"))
+    log_file = Path(log_path / f"webhook_prsv_{datetime.now().strftime('%Y%m%d')}_{datetime.now().strftime('%H%M')}.log")
+    setup_logging(log_file, log_format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s', console_format='%(threadName)s - %(levelname)s - %(message)s')
     
     args = parse_args()
     app.config['CONTAINER_DB'] = args.container_db
-    init_db()
+    db_utils.init_db(DB_FILE)
     
     if args.retry_containers:
         if not args.container_db:

@@ -1,3 +1,4 @@
+from repair_tools.utils.format_utils import print_standard_summary
 import argparse
 import logging
 import json
@@ -9,6 +10,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 
 from repair_tools.archive import create_pkg_report
+from repair_tools.utils import prsv_api_helpers 
 from repair_tools.archive.create_pkg_report import requests_retry_session
 from repair_tools.utils.preservica_search_parse import PreservicaAPI
 from repair_tools.utils import prsv_api
@@ -354,45 +356,6 @@ def scan_parent_for_duplicates(api: PreservicaAPI, parent_uuid: str, prefix: str
     duplicates = {t: uuids for t, uuids in title_map.items() if len(uuids) > 1}
     return duplicates
 
-def get_preservica_objects(api: PreservicaAPI, uuid: str, session) -> dict:
-    """Fetches file metadata (size, md5) for a given package UUID in Preservica."""
-    file_data = {}
-    
-    try:
-        version = prsv_api.find_apiversion(api.credentials_name)
-        token = prsv_api.get_token(api.credentials_name)
-    except Exception as e:
-        logger.error(f"Error getting token/version for {uuid}: {e}")
-        return file_data
-
-    namespaces = {
-        'xip': f'http://preservica.com/XIP/v{version}',
-        'entity': f'http://preservica.com/EntityAPI/v{version}'
-    }
-
-    child_so_refs = []
-    io_info_list = []
-    
-    try:
-        create_pkg_report.find_all_children(token, version, uuid, child_so_refs, io_info_list, session, namespaces)
-    except Exception as e:
-        logger.error(f"Error finding package children for {uuid}: {e}")
-        return file_data
-
-    for io_info in io_info_list:
-        io_ref = io_info['ref']
-        reps = create_pkg_report.get_representation_details(token, version, io_ref, session, namespaces)
-        for rep in reps:
-            co_refs = create_pkg_report.get_generation_details(token, version, io_ref, rep['type'], session, namespaces)
-            for co_ref in co_refs:
-                bitstream = create_pkg_report.get_bitstream_details(token, version, co_ref, session, namespaces)
-                if bitstream and bitstream.get('filename'):
-                    file_data[bitstream['filename']] = {
-                        'size': bitstream.get('filesize'),
-                        'md5': bitstream.get('fixity', {}).get('MD5', '').lower()
-                    }
-    return file_data
-
 def normalize_filename(fname: str) -> str:
     """Normalizes filenames so .m4a equivalents map to .mp4 for comparison."""
     if fname.lower().endswith('.m4a'):
@@ -408,7 +371,7 @@ def compare_duplicate_contents(api: PreservicaAPI, title: str, valid_items: list
     for item in valid_items:
         uuid = item['uuid']
         logger.info(f"Getting objects for UUID: {uuid} (Ingested: {item['date_str']})")
-        contents = get_preservica_objects(api, uuid, session)
+        contents = prsv_api_helpers.get_preservica_objects(api, uuid, session)
         uuid_contents[uuid] = contents
         for fname in contents.keys():
             normalized_all.add(normalize_filename(fname))
@@ -611,23 +574,23 @@ def main():
                 except Exception as e:
                     logger.error(f"Error processing duplicates for '{title}': {e}")
 
-    logger.info("DUPLICATES SUMMARY")
-    
-    if summary_results["RESOLVED"]:
-        logger.info(f"Successfully Resolved (or Dry-Run): COUNT: {len(summary_results['RESOLVED'])}")
-        for title, data in summary_results["RESOLVED"].items():
-            keep_date = data["keep"]["date_str"]
-            remove_dates = ", ".join([i["date_str"] for i in data["remove"]])
-            logger.info(f"{title} - Kept: {keep_date} | Removed: {remove_dates}")
-            
-    if summary_results["REVIEW"]:
-        logger.info(f"Flagged for Review (Missing files or checksum mismatches): [COUNT: {len(summary_results['REVIEW'])}]")
-        for title, items in summary_results["REVIEW"].items():
-            dates = [i['date_str'] for i in items]
-            logger.info(f"{title} ({len(items)}): {', '.join(dates)}")
-            
-    if not summary_results["RESOLVED"] and not summary_results["REVIEW"]:
-        logger.info("No valid duplicates resolved.")
+    summary = {
+        "Resolved (or Dry-Run)": len(summary_results['RESOLVED']),
+        "Flagged for Review":    len(summary_results['REVIEW']),
+    }
+    if summary_results['RESOLVED']:
+        summary["Resolved Packages"] = [
+            f"{title}: kept {data['keep']['date_str']}, removed {', '.join(i['date_str'] for i in data['remove'])}"
+            for title, data in summary_results['RESOLVED'].items()
+        ]
+    if summary_results['REVIEW']:
+        summary["Review Packages"] = [
+            f"{title} ({len(items)}): {', '.join(i['date_str'] for i in items)}"
+            for title, items in summary_results['REVIEW'].items()
+        ]
+    if not summary_results['RESOLVED'] and not summary_results['REVIEW']:
+        summary["Status"] = "No valid duplicates resolved."
+    print_standard_summary("Duplicates Summary", summary, logger=logger)
 
 if __name__ == "__main__":
     main()

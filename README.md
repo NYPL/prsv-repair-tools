@@ -1,32 +1,66 @@
 # Repair Tools
-CLI toolkit built to audit, repair, and report on digital preservation packages ("bags") for NYPL Preservica ingest workflows. 
 
-## Features
+A CLI toolkit for auditing, repairing, and managing digital preservation packages for Preservica ingest workflows.
 
-- **Source-Target Synchronization**: Compares local source directories against target directories and/or Preservica contents to identify missing or unsuccessful ingests.
-- **Automated Repairs**: Includes utilities to correct bag structures, generate missing manifiests, estbalishing symlinks to existing local assets for storage optimzation, and remove unnecessary files/directories from bags.
-- **Workflow Management**: Supports deletion workflows and re-ingest checklists to track package status updates.
+## Overview
+
+This project provides a collection of scripts organized around common package management tasks: checking integrity, cleaning up bag structures, moving packages between locations, transcoding media, and generating checksums and manifests.
+
+Scripts are designed to be run individually from the command line.
 
 ## Installation
 
-This project uses [Poetry](https://python-poetry.org/) for dependency management.
+Requires [Poetry](https://python-poetry.org/) for dependency management.
 
 ```bash
-# Clone the repository
 git clone <repo_url>
-cd prsv_repair_tools
-
-# Install dependencies
+cd repair-tools
 poetry install
-
-# Configure settings
-# Copy the template to a usable INI file
-cp compare_sources_template.ini compare_sources.ini
 ```
-> [!NOTE]
-> Ensure `compare_sources.ini` is configured with your specific `CACHE_PATH` before running audits.
+
+## Features
+
+### Package Auditing
+- Check package sizes against a configurable threshold
+- Identify and resolve duplicate packages in Preservica by comparing checksums and ingest dates
+
+### Package Repair & Cleanup
+- Correct malformed bag structures
+- Delete empty folders, zero-byte files, and hidden system files
+- Flatten nested media directories
+- Remove transient folders from Preservica after ingest is confirmed
+
+### Bag Construction
+- Create standard bag directory structures
+- Build symlink-based bags pointing to source assets (avoiding duplication)
+- Generate and update `manifest-md5.txt` files
+- Expand Excel-based package manifests into bag structures with sidecar JSON
+
+### Media Processing
+- Generate MD5 checksums for files within a package's data directories
+- Transcode media files (WAV → FLAC, MOV → MKV) with lossless verification
+- Download or transcode service copy MP4s from S3 or local sources
+
+### Preservica Workflows
+- Move packages between folders in Preservica by title
+- Delete structural objects from Preservica
+
+## Project Structure
+
+```
+repair_tools/
+├── utils/           # Shared utilities (logging, CLI parsing, file ops, API helpers)
+├── path_tools/      # Path and index searching helpers
+└── *.py             # Individual CLI scripts
+```
 
 ## Usage
 
-> [!WARNING]
-> Under construction.
+Each script supports `--help` for available arguments:
+
+```bash
+poetry run <script-name> --help
+```
+
+> [!NOTE]
+> Some scripts require a `credentials.ini` file with Preservica API credentials configured before use.

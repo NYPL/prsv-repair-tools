@@ -1,4 +1,5 @@
 import argparse
+from repair_tools.utils.cli import extant_dir, list_of_paths, ExtendUnique as StoreListAction
 import logging
 from pathlib import Path
 
@@ -29,24 +30,7 @@ def parse_args() -> argparse.Namespace:
         )
     return parser.parse_args()
     
-def list_of_paths(p: str) -> list[Path]:
-    path = extant_dir(p)
-    child_dirs = []
-    for child in path.iterdir():
-        if child.is_dir():
-            child_dirs.append(child)
 
-    if not child_dirs:
-        raise argparse.ArgumentTypeError(f"{path} does not contain child directories")
-
-    return child_dirs
-
-def extant_dir(p: str) -> Path:
-    path = Path(p)
-    if not path.is_dir():
-        raise argparse.ArgumentTypeError(f"{path} is not a directory")
-
-    return path
 
 def manage_zero_byte_files(directories: set[Path]):
     zero_byte_files = []
