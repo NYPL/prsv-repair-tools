@@ -1,6 +1,6 @@
 import argparse
 from repair_tools.utils.format_utils import print_standard_summary
-from repair_tools.utils.cli import extant_dir, list_of_paths, ExtendUnique as StoreListAction
+from repair_tools.utils.cli import extant_dir
 import logging
 import os
 import re

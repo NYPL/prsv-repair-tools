@@ -4,7 +4,6 @@ import re
 import subprocess
 import argparse
 import sys
-import logging
 from datetime import datetime
 from pathlib import Path
 
