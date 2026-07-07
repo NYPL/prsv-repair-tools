@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import repair_tools.ami_scripts_imports.video_processing as vp
 import repair_tools.ami_scripts_imports.audio_to_mp4_converter as amp4
-import repair_tools.ami_scripts_imports.iso_transcoder_makemkv as iso_worker 
 import repair_tools.utils.aws_utils as aws_utils
 
 from repair_tools.utils.logger_setup import setup_logging
@@ -65,11 +64,6 @@ def parse_args():
         default=Path.home() / "Documents/download_sc_logs",
         help="Directory to store logs"
     )
-    parser.add_argument(
-        "--force-concat", 
-        action="store_true",
-        help="For ISOs: Force concatenation of tracks into single MP4 file."
-    )
     
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -93,10 +87,6 @@ DEFAULT_INDEX_PATH = Path.home() / "Documents/s3_index.json"
 NUM_CPU_THREADS = os.cpu_count() or 4
 NUM_DOWNLOAD_THREADS = 8
 
-# FALSE = download iso SCs only, TRUE = transcode if no download available
-# make this an arg?
-ENABLE_ISO_TRANSCODE = False
-
 ################# 
 
 def json_datetime_serializer(obj):
@@ -114,8 +104,45 @@ def find_pm_files(pkg_dir: Path) -> list[Path]:
     valid_exts = {'.mkv', '.mov', '.dv', '.flac', '.wav', '.iso'}
     return [p for p in pm_dir.rglob('*') if p.suffix.lower() in valid_exts and not p.name.startswith('._')]
 
+def get_media_duration(file_path: Path) -> float:
+    """Uses ffprobe to extract duration of a media file."""
+    cmd = [
+        'ffprobe', '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        str(file_path)
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(result.stdout.strip())
+    except Exception as e:
+        logging.error(f"Failed to get duration for {file_path.name}: {e}")
+        return -1.0
+
+def verify_transcode_success(pm_path: Path, sc_path: Path) -> bool:
+    """Confirms the output file is not empty and matches duration of the source file."""
+    if not sc_path.exists() or sc_path.stat().st_size == 0:
+        logging.error(f"Verification failed: {sc_path.name} does not exist or is empty.")
+        return False
+        
+    pm_duration = get_media_duration(pm_path)
+    sc_duration = get_media_duration(sc_path)
+    
+    if pm_duration < 0 or sc_duration < 0:
+        logging.error(f"Verification failed: Could not retrieve duration for {pm_path.name} or {sc_path.name}.")
+        return False
+        
+    # Duration comparison within a 0.5s margin to account for container differences
+    duration_diff = abs(pm_duration - sc_duration)
+    if duration_diff > 0.5:
+        logging.error(f"Verification failed: Duration mismatch for {sc_path.name}. PM: {pm_duration}s, SC: {sc_duration}s (diff: {duration_diff}s)")
+        return False
+        
+    logging.info(f"Verification successful for {sc_path.name}. Duration diff: {duration_diff:.3f}s")
+    return True
+
 def create_sc_worker(task):
-    pkg_path, files_to_process, force_concat, iso_transcode_enabled = task
+    pkg_path, files_to_process = task
     errors = []
     successful_files = []
     
@@ -147,64 +174,35 @@ def create_sc_worker(task):
                 continue
 
             try:
-                if file_path.suffix.lower() == '.iso':
-                    if not iso_transcode_enabled:
-                        raise RuntimeError("ISO transcoding is disabled.")
-
-                    logging.info(f"Extracting ISO: {file_path.name}")
-
-                    temp_mkv_dir = iso_worker.process_iso_with_makemkv(file_path, sc_dir)
-                    
-                    
-                    if temp_mkv_dir:
-                        iso_basename = file_path.stem.replace("_pm", "")
-                        iso_success = iso_worker.transcode_mkv_files(
-                            temp_mkv_dir, 
-                            iso_basename, 
-                            sc_dir, 
-                            force_concat=force_concat
-                        )
-                    
-                        try:
-                            for f in temp_mkv_dir.glob("*"):
-                                f.unlink()
-                            temp_mkv_dir.rmdir()
-                        except Exception as cleanup_err:
-                            logging.warning(f"Failed to cleanup temp ISO dir {temp_mkv_dir}: {cleanup_err}")
-
-                        if not iso_success:
-                            raise RuntimeError(f"ISO transcoding failed for {file_path.name}")
-                    else:
-                        logging.warning(f"MakeMKV failed to extract {file_path.name}. Checking if it is an audio/data CD-ROM ISO...")
-                        audio_iso_success = process_audio_iso(file_path, sc_dir)
-                        if not audio_iso_success:
-                            raise RuntimeError(f"MakeMKV failed to extract {file_path.name} and audio ISO processing fallback failed.")
-
-                elif file_path.suffix.lower() in {'.wav', '.flac'}:
+                if file_path.suffix.lower() in {'.wav', '.flac'}:
                     target_sc_path = sc_dir / sc_name
                     amp4.convert_audio(str(file_path), "mp4", output_file=str(target_sc_path))
                 else:
                     vp.convert_to_mp4(file_path.resolve(), file_path.name, sc_dir, audio_pan="auto")
                 
+                created_path = None
                 if (sc_dir / sc_name).exists():
-                    successful_files.append(sc_name)
-                    print(f"Successfully created service copy: {sc_name}")
+                    created_path = sc_dir / sc_name
                 elif (sc_dir / em_name).exists():
-                    successful_files.append(em_name)
-                    print(f"Successfully created service copy: {em_name}")
+                    created_path = sc_dir / em_name
                 elif (sc_dir / file_path.with_suffix('.mp4').name).exists():
-                    created = sc_dir / file_path.with_suffix('.mp4').name
-                    created.rename(sc_dir / sc_name)
-                    print(f"Successfully created service copy: {sc_name}")
-                    successful_files.append(sc_name)
-                elif file_path.suffix.lower() == '.iso':
-                    split_files = list(sc_dir.glob(f"{file_path.stem.replace('_pm','')}*_sc.mp4"))
-                    if split_files:
-                        successful_files.append(sc_name) 
-                    else:
-                        raise FileNotFoundError(f"No SC files created for ISO {file_path.name}")
+                    created_path = sc_dir / file_path.with_suffix('.mp4').name
+                    try:
+                        created_path = created_path.rename(sc_dir / sc_name)
+                    except Exception as e:
+                        logging.error(f"Failed to rename created file {created_path} to {sc_name}: {e}")
+                        created_path = sc_dir / sc_name
+
+                if created_path and verify_transcode_success(file_path, created_path):
+                    successful_files.append(created_path.name)
+                    print(f"Successfully created and verified service copy: {created_path.name}")
                 else:
-                    raise FileNotFoundError(f"Transcoder finished but {sc_name} was not created.")
+                    if created_path and created_path.exists():
+                        try:
+                            created_path.unlink()
+                        except Exception as e:
+                            logging.error(f"Failed to delete invalid output file {created_path.name}: {e}")
+                    raise RuntimeError(f"Verification failed for service copy of {file_path.name}")
                     
             except Exception as e:
                 errors.append(f"Transcode failed for {file_path.name}: {e}")
@@ -212,105 +210,6 @@ def create_sc_worker(task):
         return pkg_path, successful_files, errors
     except Exception as e:
         return pkg_path, [], [f"Exception: {str(e)}"]
-
-def process_audio_iso(iso_path: Path, sc_dir: Path) -> bool: # this function added by gemini, double check
-    """
-    Attempt to extract a CD-ROM/audio/data ISO
-    and convert the audio files inside to .mp4 service copies.
-    """
-    import tempfile
-    
-    logging.info(f"Attempting to process ISO {iso_path.name} as an audio/data CD-ROM ISO.")
-    
-    temp_extract_dir = Path(tempfile.mkdtemp())
-    extracted = False
-    
-    # Try 7z / 7za first
-    for tool in ["7z", "7za", "/opt/homebrew/bin/7z", "/opt/homebrew/bin/7za"]:
-        try:
-            # Check if tool is available
-            subprocess.run([tool, "--help"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-            logging.info(f"Extracting with {tool}...")
-            subprocess.run([tool, "x", f"-o{temp_extract_dir}", str(iso_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            extracted = True
-            break
-        except Exception:
-            continue
-            
-    # macOS fallback using hdiutil if 7z is not available
-    if not extracted and os.uname().sysname == "Darwin":
-        logging.info("7z not available. Attempting macOS hdiutil mount...")
-        mount_point = None
-        try:
-            mount_res = subprocess.run(
-                ["hdiutil", "mount", "-nobrowse", "-readonly", str(iso_path)],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            for line in mount_res.stdout.splitlines():
-                if "/Volumes/" in line:
-                    mount_point = Path(line.split("/Volumes/")[-1].strip())
-                    mount_point = Path("/Volumes") / mount_point
-                    break
-            
-            if mount_point and mount_point.exists():
-                logging.info(f"Mounted successfully at {mount_point}. Copying files...")
-                shutil.copytree(mount_point, temp_extract_dir, dirs_exist_ok=True)
-                extracted = True
-        except Exception as e:
-            logging.warning(f"hdiutil mount failed: {e}")
-        finally:
-            if mount_point:
-                subprocess.run(["hdiutil", "detach", str(mount_point)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                
-    if not extracted:
-        logging.error(f"Failed to extract {iso_path.name}: No available tools (7z/7za/hdiutil).")
-        try:
-            shutil.rmtree(temp_extract_dir)
-        except Exception:
-            pass
-        return False
-        
-    try:
-        # Find all audio files recursively
-        audio_files = []
-        valid_audio_suffixes = {'.aif', '.aiff', '.wav', '.flac', '.mp3', '.m4a'}
-        for p in temp_extract_dir.rglob('*'):
-            if p.suffix.lower() in valid_audio_suffixes and not p.name.startswith('._'):
-                audio_files.append(p)
-                
-        if not audio_files:
-            logging.warning(f"No audio files found inside the extracted ISO {iso_path.name}.")
-            return False
-            
-        audio_files.sort(key=lambda x: x.name)
-        logging.info(f"Found {len(audio_files)} audio file(s) in ISO: {[f.name for f in audio_files]}")
-        
-        iso_basename = iso_path.stem.replace("_pm", "")
-        success = True
-        
-        for idx, audio_file in enumerate(audio_files, start=1):
-            if len(audio_files) > 1:
-                output_name = f"{iso_basename}f01r{str(idx).zfill(2)}_sc.mp4"
-            else:
-                output_name = f"{iso_basename}_sc.mp4"
-                
-            output_path = sc_dir / output_name
-            logging.info(f"Transcoding audio file {audio_file.name} -> {output_name}")
-            try:
-                amp4.convert_audio(str(audio_file), "mp4", output_file=str(output_path))
-            except Exception as trans_err:
-                logging.error(f"Failed to transcode {audio_file.name}: {trans_err}")
-                success = False
-                
-        return success
-        
-    finally:
-        try:
-            shutil.rmtree(temp_extract_dir)
-        except Exception as cleanup_err:
-            logging.warning(f"Failed to clean up temporary directory {temp_extract_dir}: {cleanup_err}")
     
 def build_s3_index(bucket_name, index_path):
     if index_path.exists():
@@ -369,7 +268,20 @@ def download_file_worker(task):
             pass
         s3 = boto3.client('s3')
         s3.download_file(bucket, key, str(dest))
-        return pkg_path, pm_filename, f"{key} found in bucket and downloaded to: {dest.name}", True
+        
+        pm_path = pkg_path / 'data' / 'PreservationMasters' / pm_filename
+        if not pm_path.exists():
+            pm_path = pkg_path / 'data' / 'EditMasters' / pm_filename
+            
+        if pm_path.exists():
+            if not verify_transcode_success(pm_path, dest):
+                if dest.exists():
+                    dest.unlink()
+                return pkg_path, pm_filename, f"Error: Downloaded file {dest.name} failed duration/validity verification", False
+        else:
+            logging.warning(f"Could not find local source file to verify download duration for {dest.name}")
+            
+        return pkg_path, pm_filename, f"{key} found in bucket, downloaded, and verified: {dest.name}", True
     except Exception as e:
         return pkg_path, pm_filename, f"Error downloading {key}: {e}", False
 
@@ -381,7 +293,7 @@ def print_summary(stats, package_status):
         "Total Packages Scanned": stats["total"],
         "PM Files Found": stats["pm_found"],
         "SC Files Secured": total_sc_secured,
-        "Overall Status": "MATCH (All PMs have an SC)" if match else f"MISMATCH (Expected {stats["pm_found"]}, got {total_sc_secured})",
+        "Overall Status": "MATCH (All PMs have an SC)" if match else f"MISMATCH (Expected {stats['pm_found']}, got {total_sc_secured})",
         "S3 Downloads": stats["dl_success"],
         "Local Transcodes": stats["tc_success"],
         "Failed Downloads": stats["dl_fail"],
@@ -410,12 +322,9 @@ def main():
 
     args = parse_args()
 
-    iso_worker.verify_makemkvcon_installation()
-
     if not args.logpath.exists():
         args.logpath.mkdir(parents=True, exist_ok=True)
     setup_logging(args.logpath / f"download_sc_{datetime.datetime.now():%Y%m%d}.log", noisy_loggers=['repair_tools', 'ffmpeg'])
-    logging.getLogger('iso_transcoder_makemkv').setLevel(logging.INFO)
 
     pkg_paths = []
     if args.package:
@@ -491,9 +400,12 @@ def main():
                     dest = sc_dir / Path(found_key).name
                     download_tasks.append((args.bucket, found_key, dest, pkg, pm_file.name, args.test))
             elif not args.download_only:
-                if pkg not in transcode_map:
-                    transcode_map[pkg] = []
-                transcode_map[pkg].append(pm_file)
+                if pm_file.suffix.lower() == '.iso':
+                    package_status[pkg]['errors'].append(f"ISO transcoding is not supported: {pm_file.name}")
+                else:
+                    if pkg not in transcode_map:
+                        transcode_map[pkg] = []
+                    transcode_map[pkg].append(pm_file)
             else:
                 package_status[pkg]['errors'].append(f"Missing from S3: {pm_file.name}")
 
@@ -515,15 +427,15 @@ def main():
                     stats['dl_fail'] += 1
                     package_status[pkg]['errors'].append(msg)
 
-    transcode_tasks = [(pkg, files, args.force_concat, ENABLE_ISO_TRANSCODE) for pkg, files in transcode_map.items()]
+    transcode_tasks = [(pkg, files) for pkg, files in transcode_map.items()]
     
     if transcode_tasks:
-        total_files = sum(len(files) for _, files, _, _ in transcode_tasks)
+        total_files = sum(len(files) for _, files in transcode_tasks)
         
         if args.test:
             logging.info(f"[TEST MODE] Would transcode: {total_files} files for {len(transcode_tasks)} packages")
             stats['tc_success'] += total_files
-            for pkg, files, _, _ in transcode_tasks:
+            for pkg, files in transcode_tasks:
                 for f in files:
                     package_status[pkg]['secured_pms'].add(f.name)
         else:
@@ -584,6 +496,31 @@ def main():
             logging.info(f"[TEST] Would move {len(successful_pkgs_to_move)} packages to {fixed_dir}")
             stats['moved'] = len(successful_pkgs_to_move)
 
+    # Identify and move any leftover packages containing ISO files to the _iso directory
+    iso_packages_to_move = []
+    for pkg in pkg_paths:
+        if pkg in successful_pkgs_to_move:
+            continue
+        pm_files = find_pm_files(pkg)
+        if any(f.suffix.lower() == '.iso' for f in pm_files):
+            iso_packages_to_move.append(pkg)
+
+    if iso_packages_to_move:
+        if not args.test:
+            iso_false_dir.mkdir(parents=True, exist_ok=True)
+            for pkg in iso_packages_to_move:
+                try:
+                    dest_path = iso_false_dir / pkg.parent.name / pkg.name
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(pkg), str(dest_path))
+                    logging.info(f"Moved ISO package {pkg.name} to {dest_path}")
+                    stats['moved'] += 1
+                except Exception as e:
+                    logging.error(f"Failed to move ISO package {pkg.name}: {e}")
+        else:
+            logging.info(f"[TEST] Would move {len(iso_packages_to_move)} ISO packages to {iso_false_dir}")
+            stats['moved'] += len(iso_packages_to_move)
+
     source_dir = Path(args.directory) if args.directory else Path(args.package).parent
 
     print_summary(stats, package_status)
@@ -599,15 +536,6 @@ def main():
                     logging.info("Empty source directory removed.")
                 except Exception as e:
                     logging.error(f"Failed to remove empty source directory: {e}")
-        else:
-            if ENABLE_ISO_TRANSCODE == False:
-                iso_false_dir.mkdir(parents=True, exist_ok=True)
-                if any(pkg for pkg, data in package_status.items() if len(data['expected_pms']) != len(data['secured_pms'])) and any(pkg for pkg in source_dir.iterdir() if pkg.suffix.lower == ".iso"):
-                    try:
-                        shutil.move(str(source_dir), str(iso_false_dir))
-                        logging.info(f"Directory containing .iso packages moved to {iso_false_dir}")
-                    except Exception as e: 
-                        logging.error(f"Failed to move .iso packages to {iso_false_dir}: {e}")
                     
                 
 
